@@ -1,0 +1,10 @@
+{$DOMAIN} {
+	reverse_proxy app:3000
+	encode gzip
+}
+
+# Fallback so `curl http://<vm-ip>` still works before DNS/domain is set up.
+:80 {
+	reverse_proxy app:3000
+	encode gzip
+}

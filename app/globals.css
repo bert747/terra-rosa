@@ -1,0 +1,916 @@
+@import "tailwindcss";
+
+/* -------------------------------------------------------------------------
+   Deliberately plain, utilitarian styling. This is an internal operations
+   tool used many times a day, not a marketing site — priorities are speed,
+   density, and readability over visual flair. No animations, no gradients,
+   no decorative imagery.
+   ------------------------------------------------------------------------- */
+
+:root {
+  --tr-bg: #f4ebde;
+  --tr-surface: #fcf8f2;
+  --tr-surface-strong: #fffdf9;
+  --tr-border: #c5b79d;
+  --tr-border-strong: #b7a98d;
+  --tr-text: #2f3b2e;
+  --tr-text-muted: #6d715a;
+  --tr-accent: #5b7147;
+  --tr-accent-soft: #e7efd9;
+  --tr-accent-contrast: #fcf8f2;
+  --tr-warn-bg: #f8e8db;
+  --tr-warn-text: #8d4d2f;
+  --tr-ok-bg: #e8efe0;
+  --tr-ok-text: #4a6741;
+}
+
+html,
+body {
+  background: linear-gradient(180deg, var(--tr-bg) 0%, #efe2ce 100%);
+  color: var(--tr-text);
+  font-family: "Manrope", "Public Sans", "Noto Sans", "Segoe UI", sans-serif;
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+  table-layout: auto;
+}
+
+th,
+td {
+  border: 1px solid var(--tr-border);
+  padding: 4px 8px;
+  text-align: left;
+  vertical-align: top;
+  white-space: normal;
+}
+
+th {
+  background: #e8dfce;
+  font-weight: 600;
+  position: sticky;
+  top: 0;
+}
+
+a {
+  color: var(--tr-accent);
+}
+
+input,
+select,
+textarea {
+  box-sizing: border-box;
+  margin: 0;
+  border: 1px solid var(--tr-border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  min-height: 40px;
+  font-size: 14px;
+  background: var(--tr-surface-strong);
+  color: var(--tr-text);
+  width: 100%;
+  outline: none;
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+  border-color: var(--tr-accent);
+  box-shadow: 0 0 0 3px rgba(91, 113, 71, 0.14);
+}
+
+textarea {
+  min-height: 96px;
+}
+
+button {
+  box-sizing: border-box;
+  margin: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--tr-border);
+  border-radius: 8px;
+  padding: 9px 14px;
+  font-size: 14px;
+  font-weight: 600;
+  background: var(--tr-surface-strong);
+  cursor: pointer;
+}
+
+button.primary {
+  background: var(--tr-accent);
+  color: var(--tr-accent-contrast);
+  border-color: var(--tr-accent);
+}
+
+button:hover {
+  filter: brightness(0.97);
+}
+
+.tr-shell {
+  width: 100%;
+  max-width: min(1400px, 100%);
+  margin: 0 auto;
+  padding: 20px 16px 44px;
+}
+
+@media (min-width: 768px) {
+  .tr-shell {
+    padding-left: 32px;
+    padding-right: 32px;
+  }
+}
+
+.tr-card {
+  background: var(--tr-surface-strong);
+  border: 1px solid var(--tr-border-strong);
+  border-radius: 12px;
+  padding: 18px;
+  margin-bottom: 16px;
+  box-shadow: 0 6px 18px rgba(70, 54, 31, 0.06);
+}
+
+/* -------------------------------------------------------------------------
+   Nav: a tab strip. The selected section reads as the front tab — white,
+   joined to the page below it, bold label — so it's obvious at a glance
+   which view you're in without having to re-read the URL.
+   ------------------------------------------------------------------------- */
+
+.tr-nav {
+  display: flex;
+  width: 100%;
+  gap: 12px;
+  align-items: center;
+  border-bottom: 1px solid var(--tr-border);
+  background: #e8dfce;
+  padding: 10px 24px;
+  position: sticky;
+  top: 0;
+  z-index: 40;
+}
+
+.tr-nav-left {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  min-width: 0;
+}
+
+.tr-nav-back {
+  min-width: 68px;
+}
+
+.tr-nav-brand {
+  padding-bottom: 0;
+  margin-right: 4px;
+  font-size: 17px;
+  letter-spacing: 0.02em;
+}
+
+.tr-tabs {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.tr-tab {
+  padding: 7px 12px;
+  font-size: 13px;
+  color: var(--tr-text-muted);
+  text-decoration: none;
+  font-weight: 600;
+  background: #ddd2bf;
+  border: 1px solid var(--tr-border);
+  border-radius: 999px;
+}
+
+.tr-tab:hover {
+  background: #efe6d6;
+  color: var(--tr-text);
+}
+
+.tr-tab-active,
+.tr-tab-active:hover {
+  background: var(--tr-accent-soft);
+  color: var(--tr-accent);
+  font-weight: 700;
+  border-color: rgba(91, 113, 71, 0.44);
+}
+
+/* Keep the nav's own links (Log in) looking like plain links, not tabs. */
+.tr-user-menu {
+  position: relative;
+}
+
+.tr-user-menu > summary {
+  list-style: none;
+  cursor: pointer;
+  user-select: none;
+  padding: 7px 11px;
+  border-radius: 999px;
+  border: 1px solid var(--tr-border);
+  background: var(--tr-surface-strong);
+}
+
+.tr-user-menu > summary::-webkit-details-marker {
+  display: none;
+}
+
+.tr-user-menu-panel {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 8px);
+  min-width: 230px;
+  background: var(--tr-surface-strong);
+  border: 1px solid var(--tr-border);
+  border-radius: 10px;
+  padding: 10px;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.12);
+}
+
+.tr-badge {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.tr-badge-warn {
+  background: var(--tr-warn-bg);
+  color: var(--tr-warn-text);
+}
+
+.tr-badge-ok {
+  background: var(--tr-ok-bg);
+  color: var(--tr-ok-text);
+}
+
+.tr-muted {
+  color: var(--tr-text-muted);
+}
+
+.tr-page-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.tr-page-title {
+  font-size: 24px;
+  line-height: 1.25;
+  margin: 0 0 12px;
+}
+
+.tr-back-link {
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.tr-section-title {
+  margin: 0 0 12px;
+  font-size: 16px;
+}
+
+.tr-table-wrap {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.tr-table {
+  width: 100%;
+  table-layout: auto;
+}
+
+.tr-col-actions {
+  white-space: nowrap;
+  width: 1%;
+  min-width: 148px;
+}
+
+.tr-cell-clip {
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tr-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+}
+
+.tr-inline-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.tr-form-section {
+  border: 1px solid var(--tr-border);
+  border-radius: 10px;
+  background: #fdf8f0;
+  padding: 14px;
+}
+
+.tr-field {
+  margin-bottom: 12px;
+}
+
+.tr-label {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--tr-text-muted);
+}
+
+.tr-required {
+  color: #b32d2e;
+}
+
+.tr-status-toggle {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.tr-chip {
+  border-radius: 999px;
+  background: #f4eee3;
+  border: 1px solid var(--tr-border);
+  color: var(--tr-text-muted);
+  min-height: 34px;
+  padding: 6px 12px;
+}
+
+.tr-chip-active {
+  background: var(--tr-accent-soft);
+  color: var(--tr-accent);
+  border-color: rgba(91, 113, 71, 0.45);
+}
+
+.tr-tag-input {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-height: 40px;
+  padding: 6px 8px;
+  border: 1px solid var(--tr-border);
+  border-radius: 8px;
+  background: var(--tr-surface-strong);
+  cursor: text;
+}
+
+.tr-tag-input:focus-within {
+  border-color: var(--tr-accent);
+  box-shadow: 0 0 0 3px rgba(91, 113, 71, 0.14);
+}
+
+.tr-tag-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 6px 3px 10px;
+  border-radius: 999px;
+  background: var(--tr-accent-soft);
+  color: var(--tr-accent);
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.tr-tag-pill-remove {
+  all: unset;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  color: var(--tr-accent);
+}
+
+.tr-tag-pill-remove:hover {
+  background: rgba(91, 113, 71, 0.22);
+}
+
+.tr-tag-input-field {
+  flex: 1 1 120px;
+  min-width: 120px;
+  border: none;
+  padding: 4px 2px;
+  min-height: unset;
+  background: transparent;
+}
+
+.tr-tag-input-field:focus {
+  box-shadow: none;
+}
+
+.tr-tag-dropdown {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  background: var(--tr-surface-strong);
+  border: 1px solid var(--tr-border);
+  border-radius: 8px;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.12);
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.tr-tag-option {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: transparent;
+  padding: 7px 10px;
+  min-height: unset;
+  font-weight: 500;
+  border-radius: 6px;
+}
+
+.tr-tag-option-active,
+.tr-tag-option:hover {
+  background: var(--tr-accent-soft);
+  color: var(--tr-accent);
+}
+
+.tr-form-actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  justify-content: flex-end;
+  margin-top: 12px;
+}
+
+.tr-danger {
+  color: #8d2c2d;
+  border-color: #bf8d8e;
+  background: #fae8e8;
+}
+
+.tr-row-link td {
+  padding: 0;
+}
+
+.tr-cell-link {
+  display: block;
+  padding: 8px;
+  color: inherit;
+  text-decoration: none;
+}
+
+.tr-row-link:hover {
+  background: #f5ecde;
+}
+
+.tr-row-link:hover .tr-cell-link {
+  color: inherit;
+}
+
+.tr-row-link {
+  cursor: pointer;
+}
+
+.tr-sticky-actions {
+  position: sticky;
+  bottom: 10px;
+  z-index: 35;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 10px;
+  border: 1px solid var(--tr-border);
+  border-radius: 10px;
+  background: rgba(252, 248, 242, 0.96);
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.12);
+  backdrop-filter: blur(2px);
+}
+
+.tr-grid-alerts-corner {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  width: min(420px, calc(100vw - 24px));
+  max-height: 42vh;
+  overflow: auto;
+  z-index: 34;
+  border: 1px solid #d4a6a7;
+  border-radius: 10px;
+  background: rgba(251, 236, 236, 0.97);
+  color: #6b2f2f;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.14);
+  padding: 10px 12px;
+}
+
+.tr-stat {
+  border: 1px solid var(--tr-border);
+  border-radius: 10px;
+  padding: 12px;
+  background: #f9f3e9;
+}
+
+/* -------------------------------------------------------------------------
+   Bed grid: one row per bed, one column per night. Dense on purpose — the
+   whole point is seeing two weeks of the house on one screen.
+   ------------------------------------------------------------------------- */
+
+.tr-grid {
+  font-size: 12px;
+}
+
+.tr-grid th,
+.tr-grid td {
+  padding: 2px 6px;
+  height: 32px;
+  min-height: 32px;
+  vertical-align: middle;
+}
+
+.tr-grid th {
+  text-align: center;
+  font-size: 11px;
+  z-index: 2;
+}
+
+.tr-grid-room,
+.tr-grid-bed {
+  position: sticky;
+  /* Per-room tint (set inline as --tr-room-label), falling back to plain
+     surface for rows that aren't a room — summary rows, event lanes. */
+  background-color: var(--tr-room-label, var(--tr-surface));
+  z-index: 1;
+}
+
+.tr-grid-room {
+  left: 0;
+  min-width: 170px;
+  width: 170px;
+  vertical-align: middle;
+}
+
+.tr-grid-bed {
+  left: 170px;
+  width: 44px;
+  min-width: 44px;
+  text-align: center;
+  color: var(--tr-text-muted);
+}
+
+.tr-grid-room-name {
+  max-width: 150px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tr-grid-room-meta {
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tr-grid th.tr-grid-room,
+.tr-grid th.tr-grid-bed {
+  z-index: 3;
+}
+
+.tr-grid-cell {
+  min-width: 92px;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+  /* Free beds show their room's tint, so you can read where one room ends and
+     the next begins straight down any column. Occupied/unavailable states
+     below override it — what's IN the bed matters more than which room it is. */
+  background-color: var(--tr-room-tint, transparent);
+}
+
+.tr-grid-cell a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.tr-grid-cell-note {
+  position: relative;
+}
+
+.tr-grid-cell-note::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 0;
+  height: 0;
+  border-top: 9px solid #b32d2e;
+  border-left: 9px solid transparent;
+}
+
+.tr-grid-occupied-wrap > a[draggable="true"] {
+  cursor: grab;
+}
+
+.tr-grid-occupied-wrap > a[draggable="true"]:active {
+  cursor: grabbing;
+}
+
+.tr-grid-drop-shadow {
+  background-image: linear-gradient(rgba(122, 59, 46, 0.24), rgba(122, 59, 46, 0.24));
+  outline: 2px dashed var(--tr-accent);
+  outline-offset: -2px;
+}
+
+.tr-grid-occupied {
+  background-color: #e7efe1;
+}
+
+.tr-grid-arrival {
+  background-color: #f4e5d4;
+  border-left: 2px solid var(--tr-accent);
+}
+
+.tr-grid-departure {
+  border-right: 2px solid var(--tr-accent);
+}
+
+/* Bookings that don't count toward capacity (residents, guardians, workers). */
+.tr-grid-noncounting {
+  background-color: #ece7f3;
+}
+
+.tr-grid-unavailable {
+  background-image: repeating-linear-gradient(
+    45deg,
+    #eeeeea,
+    #eeeeea 4px,
+    #e4e4df 4px,
+    #e4e4df 8px
+  );
+}
+
+/* A bed that's been dragged out to another room for a date range (source
+   side of a Grid bed move) — same stripe treatment as a generic capacity
+   gap, but tinted so staff can tell "moved elsewhere" apart from "this room
+   never had this bed". The target room's cells before the move's start date
+   use the plain grey stripes above, since nothing has moved there yet. */
+.tr-grid-moved-away {
+  background-image: repeating-linear-gradient(
+    45deg,
+    #f3e2d6,
+    #f3e2d6 4px,
+    #e8c9ae 4px,
+    #e8c9ae 8px
+  );
+}
+
+.tr-grid-weekend.tr-grid-moved-away {
+  background-image: repeating-linear-gradient(
+    45deg,
+    #f3e2d6,
+    #f3e2d6 4px,
+    #e8c9ae 4px,
+    #e8c9ae 8px
+  );
+}
+
+/* Someone is in a bed the room doesn't have that night. */
+.tr-grid-conflict {
+  background-color: var(--tr-warn-bg);
+  color: var(--tr-warn-text);
+  font-weight: 600;
+}
+
+.tr-grid-overflow {
+  background-color: var(--tr-warn-bg);
+  color: var(--tr-warn-text);
+  font-weight: 600;
+}
+
+/* Weekend shading is a background-IMAGE overlay rather than a colour so it
+   composites over the per-room tint instead of replacing it. */
+.tr-grid-weekend {
+  background-image: linear-gradient(rgba(0, 0, 0, 0.055), rgba(0, 0, 0, 0.055));
+}
+
+.tr-grid-weekend.tr-grid-occupied,
+.tr-grid-weekend.tr-grid-conflict {
+  background-image: none;
+}
+
+/* Unavailable/moved beds are drawn entirely via background-image (the
+   diagonal stripes), so the weekend overlay above must not blank it out -
+   that would hide the striped pattern on weekend columns. Repeat it here so
+   the stripes stay visible through the weekend column. */
+.tr-grid-weekend.tr-grid-unavailable {
+  background-image: repeating-linear-gradient(
+    45deg,
+    #eeeeea,
+    #eeeeea 4px,
+    #e4e4df 4px,
+    #e4e4df 8px
+  );
+}
+
+.tr-grid th.tr-grid-weekend {
+  background-color: #efece7;
+}
+
+/* First bed row of each room: a heavier rule so room blocks are separable
+   even where two adjacent rooms happen to share a tint. */
+.tr-grid-room-start > td {
+  border-top: 2px solid #b9b9b2;
+}
+
+.tr-grid-summary td {
+  font-weight: 600;
+  background-color: #e8dfce;
+  text-align: center;
+}
+
+.tr-grid-summary td:first-child {
+  position: sticky;
+  left: 0;
+  text-align: left;
+  z-index: 1;
+}
+
+/* -------------------------------------------------------------------------
+   Empty-cell click target: clicking a free bed/night starts a new booking
+   pre-filled with that room and date. Kept invisible until hover so it
+   doesn't add noise to a grid that's mostly empty cells.
+   ------------------------------------------------------------------------- */
+
+/* Selector is written `.tr-grid-cell a.tr-grid-new` rather than just
+   `.tr-grid-new` so it outranks the `.tr-grid-cell a { color: inherit }` rule
+   above — otherwise the + shows in every free cell and the grid turns into a
+   field of plus signs. */
+.tr-grid-cell a.tr-grid-new {
+  display: block;
+  min-height: 15px;
+  color: transparent;
+  text-align: center;
+  font-weight: 700;
+}
+
+.tr-grid-cell:hover > a.tr-grid-new {
+  color: var(--tr-accent);
+}
+
+.tr-grid-cell:has(> .tr-grid-new):hover {
+  outline: 2px solid var(--tr-accent);
+  outline-offset: -2px;
+  cursor: pointer;
+}
+
+/* -------------------------------------------------------------------------
+   Event lanes: multi-day events/retreats as bands across the top of the
+   grid, one lane per row so overlapping events stack rather than collide
+   (the same layout Google Calendar uses for all-day events).
+   ------------------------------------------------------------------------- */
+
+.tr-grid-event-lane > td {
+  padding: 1px 2px;
+  height: 26px;
+}
+
+.tr-grid-group-row > td {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  font-size: 11px;
+  background: #e1d5c0;
+  color: #5c4d38;
+  border-top: 2px solid #b8a98b;
+  border-bottom: 2px solid #b8a98b;
+}
+
+.tr-grid-event-head {
+  vertical-align: middle;
+  font-weight: 600;
+}
+
+.tr-grid-event {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding: 0 !important;
+}
+
+.tr-grid-event > a,
+.tr-grid-event > span {
+  display: block;
+  background: var(--tr-event-bg, #dfe9d8);
+  border: 1px solid var(--tr-event-border, #8fa67e);
+  border-radius: 3px;
+  color: var(--tr-text);
+  text-decoration: none;
+  font-weight: 600;
+  font-size: 11px;
+  padding: 1px 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Squared-off edge where an event runs past the visible window, so a band
+   that continues off-screen doesn't look like it ends there. */
+.tr-grid-event-open-start > a,
+.tr-grid-event-open-start > span {
+  border-left: none;
+  border-radius: 0 3px 3px 0;
+}
+
+.tr-grid-event-open-end > a,
+.tr-grid-event-open-end > span {
+  border-right: none;
+  border-radius: 3px 0 0 3px;
+}
+
+.tr-grid-event-open-start.tr-grid-event-open-end > a,
+.tr-grid-event-open-start.tr-grid-event-open-end > span {
+  border-radius: 0;
+}
+
+.tr-move-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 30;
+}
+
+.tr-move-modal {
+  width: min(640px, calc(100vw - 24px));
+  background: var(--tr-surface);
+  border: 1px solid var(--tr-border);
+  border-radius: 8px;
+  padding: 14px;
+}
+
+.tr-move-grid {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  gap: 12px;
+  align-items: center;
+}
+
+.tr-move-arrow {
+  font-size: 26px;
+  font-weight: 700;
+  color: var(--tr-accent);
+}
+
+@media (max-width: 900px) {
+  .tr-shell {
+    padding: 14px 14px 28px;
+  }
+
+  .tr-nav {
+    padding: 10px 14px;
+  }
+
+  .tr-nav-left {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+
+  .tr-form-grid,
+  .tr-inline-grid {
+    grid-template-columns: 1fr;
+  }
+}
