@@ -29,10 +29,6 @@ export default async function LoginPage({
             Log in
           </button>
         </form>
-        <p className="tr-muted" style={{ marginTop: 12, fontSize: 12 }}>
-          Housekeeping staff: use your unlisted{" "}
-          <a href="/housekeeping">housekeeping link</a> instead — no login needed.
-        </p>
       </div>
     </div>
   );

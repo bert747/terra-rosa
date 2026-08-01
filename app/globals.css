@@ -544,8 +544,41 @@ button:hover {
    whole point is seeing two weeks of the house on one screen.
    ------------------------------------------------------------------------- */
 
+/* Fixed-height, both-axes-scrollable viewport for the time-travel grid —
+   its own bounded canvas below the page nav, independent of page scroll, so
+   drag-to-pan and the virtualized date columns have a stable scroll frame. */
+.tr-grid-viewport {
+  height: calc(100vh - 260px);
+  min-height: 320px;
+  overflow: auto;
+  touch-action: none;
+  cursor: grab;
+  border: 1px solid var(--tr-border);
+  border-radius: 8px;
+  background: var(--tr-surface);
+}
+
+.tr-grid-viewport.tr-grid-panning {
+  cursor: grabbing;
+  user-select: none;
+}
+
 .tr-grid {
   font-size: 12px;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+.tr-grid thead th {
+  position: sticky;
+  top: 0;
+  z-index: 4;
+  background-color: var(--tr-surface);
+}
+
+.tr-grid thead th.tr-grid-room,
+.tr-grid thead th.tr-grid-bed {
+  z-index: 5;
 }
 
 .tr-grid th,
@@ -606,6 +639,7 @@ button:hover {
 }
 
 .tr-grid-cell {
+  position: relative;
   min-width: 92px;
   max-width: 140px;
   overflow: hidden;
@@ -746,6 +780,48 @@ button:hover {
   background-color: #efece7;
 }
 
+/* A bed not placed in this room on this date — sprouted in later or already
+   collapsed away. Not bookable. */
+.tr-grid-inactive {
+  background-image: repeating-linear-gradient(
+    45deg,
+    #f0f0ec,
+    #f0f0ec 4px,
+    #e6e6e0 4px,
+    #e6e6e0 8px
+  );
+}
+
+/* A single tiny chain icon hugging the bottom edge of a "double" joined
+   pair's top-row cell — lives only there (never the bottom row's, so it can
+   never be duplicated) and stays fully INSIDE that cell's own box (no
+   negative offset past the border). CSS table layout doesn't reliably let a
+   cell's content spill into the row below no matter what its own overflow
+   is set to, so an icon positioned to literally straddle the line ends up
+   half-clipped — sitting just above the border reads as "belongs to this
+   row, points at its partner below" without fighting that.
+   Deliberately no z-index: the sticky Room/Bed columns (z-index: 1) must
+   always paint over it, or the icon shows through them when a date column
+   scrolls in underneath — no z-index here leaves it in normal paint order,
+   which sits below anything actually raised above the flow. */
+.tr-grid-chain {
+  position: absolute;
+  left: 50%;
+  bottom: 2px;
+  transform: translateX(-50%);
+  font-size: 10px;
+  line-height: 1;
+  pointer-events: none;
+  opacity: 0.9;
+}
+
+/* A "Solo Double" cell spanning both of a joined pair's rows for one date —
+   sold as a single spot, so it gets its own tint to read as one unit rather
+   than two stacked bookable beds. */
+.tr-grid-solo-merged {
+  background-color: #f4efe2;
+}
+
 /* First bed row of each room: a heavier rule so room blocks are separable
    even where two adjacent rooms happen to share a tint. */
 .tr-grid-room-start > td {
@@ -788,6 +864,28 @@ button:hover {
 }
 
 .tr-grid-cell:has(> .tr-grid-new):hover {
+  outline: 2px solid var(--tr-accent);
+  outline-offset: -2px;
+  cursor: pointer;
+}
+
+/* Unlike the bare "+", an empty Solo Double spot is a real label, not a
+   subtle affordance — it stays visible by default rather than only on
+   hover. */
+.tr-grid-cell a.tr-grid-solo-new {
+  display: block;
+  min-height: 15px;
+  color: var(--tr-muted-text, #8a8578);
+  text-align: center;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.tr-grid-cell:hover > a.tr-grid-solo-new {
+  color: var(--tr-accent);
+}
+
+.tr-grid-cell:has(> .tr-grid-solo-new):hover {
   outline: 2px solid var(--tr-accent);
   outline-offset: -2px;
   cursor: pointer;

@@ -1,12 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
-import { rooms } from "@/db/schema";
+import { floors } from "@/db/schema";
 import { requireEditor } from "@/lib/auth";
+import { asc } from "drizzle-orm";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
-  const rows = await db.select().from(rooms);
+  const rows = await db.select().from(floors).orderBy(asc(floors.name));
   return NextResponse.json(rows);
 }
 
@@ -19,13 +20,8 @@ export async function POST(req: NextRequest) {
 
   const body = await req.json();
   const name = String(body.name ?? "").trim();
-  const floorId = Number(body.floorId);
+  if (!name) return NextResponse.json({ error: "Floor name is required" }, { status: 400 });
 
-  if (!name) return NextResponse.json({ error: "Room name is required" }, { status: 400 });
-  if (!Number.isInteger(floorId) || floorId <= 0) {
-    return NextResponse.json({ error: "A floor is required" }, { status: 400 });
-  }
-
-  const [room] = await db.insert(rooms).values({ name, floorId }).returning();
-  return NextResponse.json(room, { status: 201 });
+  const [floor] = await db.insert(floors).values({ name }).returning();
+  return NextResponse.json(floor, { status: 201 });
 }

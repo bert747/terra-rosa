@@ -4,18 +4,16 @@ import NavTabs, { type NavLink } from "@/components/NavTabs";
 import BackButton from "@/components/BackButton";
 
 const LINKS: NavLink[] = [
-  { href: "/dashboard", label: "Dashboard" },
   { href: "/grid", label: "Grid" },
   { href: "/bookings", label: "Bookings" },
-  { href: "/rooms", label: "Rooms" },
-  { href: "/meals", label: "Meals" },
-  { href: "/guardians", label: "Guardians" },
-  { href: "/housekeeping", label: "Housekeeping" },
   { href: "/events", label: "Events" },
 ];
 
 // Editor-only sections, appended to LINKS for editors.
-const EDITOR_LINKS: NavLink[] = [{ href: "/users", label: "Users" }];
+const EDITOR_LINKS: NavLink[] = [
+  { href: "/settings/layout", label: "Layout" },
+  { href: "/users", label: "Users" },
+];
 
 export default async function Nav() {
   const user = await getCurrentUser();

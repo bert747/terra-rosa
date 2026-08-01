@@ -14,7 +14,7 @@ export default function BackButton() {
           router.back();
           return;
         }
-        router.push("/dashboard");
+        router.push("/grid");
       }}
     >
       Back

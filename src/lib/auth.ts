@@ -117,32 +117,3 @@ export async function verifyPassword(email: string, password: string): Promise<U
 export async function hashPassword(password: string): Promise<string> {
   return bcrypt.hash(password, 10);
 }
-
-// ---------------------------------------------------------------------------
-// Housekeeping PIN gate (separate, much lighter-weight than the session
-// system above). Cookie is short-lived and per-browser so staff on a shared
-// tablet don't need to re-enter the PIN every single day.
-// ---------------------------------------------------------------------------
-
-const HOUSEKEEPING_COOKIE = "tr_hk_pin_ok";
-
-export async function checkHousekeepingPin(pin: string): Promise<boolean> {
-  const expected = process.env.HOUSEKEEPING_PIN ?? "";
-  return expected.length > 0 && pin === expected;
-}
-
-export async function setHousekeepingPinCookie() {
-  const cookieStore = await cookies();
-  cookieStore.set(HOUSEKEEPING_COOKIE, "1", {
-    httpOnly: true,
-    sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
-    path: "/",
-    maxAge: 60 * 60 * 24 * 14, // 14 days
-  });
-}
-
-export async function hasHousekeepingPinCookie(): Promise<boolean> {
-  const cookieStore = await cookies();
-  return cookieStore.get(HOUSEKEEPING_COOKIE)?.value === "1";
-}
