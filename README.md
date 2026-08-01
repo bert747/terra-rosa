@@ -91,6 +91,11 @@ cp .env.example .env      # edit if needed
 npm run start-dev         # starts DB, pushes schema, seeds, runs dev server
 ```
 
+Run this in a normal foreground terminal, not backgrounded/piped: the schema
+push step (`drizzle-kit push`) can occasionally show an interactive
+confirmation prompt if it detects an ambiguous schema change, and it needs a
+real terminal to show/answer that.
+
 ### Manual setup
 
 ```bash
@@ -142,28 +147,114 @@ docker compose up -d --build
 
 ## Deploying to GCP
 
-1. Create an `e2-micro` VM (Ubuntu 22.04/24.04) in `us-central1`, `us-west1`, or
-   `us-east1` — these regions are covered by the Compute Engine Always Free tier.
-2. Restrict the firewall to ports 80/443 (public) and SSH only via your own IP
-   or Tailscale — do not leave 22 open to the world.
-3. Point a DNS record at the VM's external IP.
-4. SSH in, install Docker + Docker Compose plugin:
-   ```bash
-   curl -fsSL https://get.docker.com | sh
-   sudo usermod -aG docker $USER   # log out/in after this
-   ```
-5. Clone this repo onto the VM.
-6. Create `.env` **on the VM only** (never commit it) with production secrets
-   and `DOMAIN=terrarosa.org`.
-7. `docker compose up -d --build`
-8. Apply any migrations under `drizzle/*.sql` that haven't been applied yet
-   (see above) — `docker compose up` only runs `db:push` + `db:seed`, not
-   these.
-9. Set up nightly backups: a cron job running
-   `docker compose exec -T db pg_dump -U terrarosa terrarosa | gzip > backup-$(date +%F).sql.gz`
-   and uploading the result somewhere with retention (Cloud Storage, etc).
-10. To deploy updates later: `git pull && docker compose up -d --build`, then
-    apply any new `drizzle/*.sql` migrations manually.
+These steps use the Google Cloud Console (console.cloud.google.com) directly —
+no `gcloud` CLI required. Everything from step 5 onward happens in a terminal
+on the VM itself, which the Console gives you a browser button for (no SSH
+client to install locally either).
+
+### 1. Project and billing
+
+1. Go to [console.cloud.google.com](https://console.cloud.google.com) and,
+   top-left project picker, **New Project**. Name it (e.g. `terra-rosa`) and
+   create it.
+2. If this Google account has never used Cloud before, you'll be prompted to
+   set up **Billing** (a billing account is required even for Always Free
+   tier resources — you won't be charged as long as you stay within the free
+   e2-micro limits described below). Follow the prompt, then make sure the
+   new project is linked to that billing account (**Billing** in the left
+   nav → **Link a billing account** if it isn't already).
+
+### 2. Create the VM
+
+1. Left nav (hamburger menu, top-left) → **Compute Engine** → **VM instances**.
+   First visit prompts you to enable the Compute Engine API — click **Enable**
+   and wait a minute for it to activate.
+2. **Create instance**.
+3. **Name**: `terra-rosa` (or anything).
+4. **Region**: `us-central1`, `us-west1`, or `us-east1` — these are the
+   regions covered by the Compute Engine Always Free tier. **Zone**: any
+   zone within it.
+5. **Machine configuration** → **Machine family: E2** → **Series: E2** →
+   **Machine type: e2-micro** (the free-tier size — anything larger will be
+   billed).
+6. **Boot disk** → **Change** → **Operating system: Ubuntu**, **Version:
+   Ubuntu 24.04 LTS (or 22.04 LTS)**, **Boot disk type: Standard persistent
+   disk**, size **30 GB** (the free-tier limit) → **Select**.
+7. **Firewall** section (same page): tick **Allow HTTP traffic** and **Allow
+   HTTPS traffic**. This auto-creates firewall rules tagged `http-server` /
+   `https-server` that this VM picks up — Caddy needs both ports open to get
+   a Let's Encrypt certificate and serve the app.
+8. **Create**. The instance appears in the VM instances list with an
+   **External IP** — note it down.
+
+### 3. Lock down SSH
+
+By default the project's `default-allow-ssh` firewall rule (VPC network →
+**Firewall**, in the left nav) allows port 22 from anywhere (`0.0.0.0/0`).
+Tighten this before doing anything else:
+
+1. **VPC network** → **Firewall** → open `default-allow-ssh`.
+2. **Edit** → change **Source IPv4 ranges** from `0.0.0.0/0` to your own
+   public IP with `/32` (look up "what is my ip"), or your Tailscale CIDR if
+   you access the VM over Tailscale instead → **Save**.
+
+(Optional but recommended) **VPC network** → **IP addresses** → **Reserve
+external static address**, attach it to this VM. Without this, the VM's
+external IP can change if you ever stop/start it, breaking DNS.
+
+### 4. DNS
+
+Point an `A` record for your domain at the VM's external (ideally now
+static) IP, at whichever DNS provider hosts the domain.
+
+### 5. SSH in and install Docker
+
+From the VM instances list, click the **SSH** button next to the instance —
+this opens a full terminal in your browser, no local SSH client or key setup
+needed.
+
+```bash
+curl -fsSL https://get.docker.com | sh
+sudo usermod -aG docker $USER   # log out/in (close and reopen the SSH tab) after this
+```
+
+### 6. Deploy the app
+
+```bash
+git clone <this repo's URL>
+cd terra-rosa
+cp .env.example .env
+nano .env   # fill in production secrets (SESSION_SECRET, POSTGRES_PASSWORD,
+            # SEED_ADMIN_EMAIL/PASSWORD) and set DOMAIN=yourdomain.org
+docker compose up -d --build
+```
+
+`.env` is created **on the VM only** and is already gitignored — never commit
+it.
+
+Apply any migrations under `drizzle/*.sql` that haven't been applied yet
+(`docker compose up` only runs `db:push` + `db:seed`, not these):
+
+```bash
+docker compose exec -T db psql -U terrarosa -d terrarosa -f - < drizzle/0004_bed_solo_periods.sql
+```
+
+Caddy requests its Let's Encrypt certificate automatically on first request
+to your domain over ports 80/443 — give it a minute after `docker compose up`
+before it's reachable over HTTPS.
+
+### 7. Ongoing
+
+- **Backups**: a cron job running
+  `docker compose exec -T db pg_dump -U terrarosa terrarosa | gzip > backup-$(date +%F).sql.gz`
+  and uploading the result somewhere with retention (a Cloud Storage bucket,
+  set up via **Cloud Storage** → **Buckets** → **Create** in the Console).
+- **Updates**: `git pull && docker compose up -d --build`, then apply any new
+  `drizzle/*.sql` migrations manually (same command as step 6).
+- **Monitoring** (optional): **Monitoring** → **Uptime checks** in the
+  Console, pointed at `https://yourdomain.org/api/health`, plus a budget
+  alert (**Billing** → **Budgets & alerts**, e.g. $5) as a safety net against
+  accidentally leaving a billable resource running.
 
 ## Known placeholders to replace before real use
 
