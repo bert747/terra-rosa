@@ -92,6 +92,21 @@ export const joinedBeds = pgTable("joined_beds", {
   bed2IdIdx: index("joined_beds_bed_2_id_idx").on(table.bed2Id),
 }));
 
+// A native two-person bed (Queen, 1.5, Double — see bed-types.ts) sleeps 2
+// and shows as 2 rows by default ("couple"). A covering row here means it's
+// sold as one spot instead for that range ("solo") — the second row merges
+// into the first. endDate null = ongoing (no scheduled switch back yet).
+export const bedSoloPeriods = pgTable("bed_solo_periods", {
+  id: serial("id").primaryKey(),
+  bedId: integer("bed_id")
+    .notNull()
+    .references(() => beds.id, { onDelete: "cascade" }),
+  startDate: date("start_date").notNull(),
+  endDate: date("end_date"),
+}, (table) => ({
+  bedIdIdx: index("bed_solo_periods_bed_id_idx").on(table.bedId),
+}));
+
 // bedId is nullable with ON DELETE SET NULL: deleting a bed must never
 // delete a booking, it should just unassign it.
 export const bookings = pgTable("bookings", {
@@ -171,5 +186,6 @@ export type Room = typeof rooms.$inferSelect;
 export type Bed = typeof beds.$inferSelect;
 export type BedLocation = typeof bedLocations.$inferSelect;
 export type JoinedBed = typeof joinedBeds.$inferSelect;
+export type BedSoloPeriod = typeof bedSoloPeriods.$inferSelect;
 export type Booking = typeof bookings.$inferSelect;
 export type EventRow = typeof events.$inferSelect;

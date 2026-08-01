@@ -6,6 +6,8 @@ import { formatDateUk, nightsBetween } from "@/lib/dates";
 import { eventColourStyle, roomColourStyle } from "@/lib/room-colours";
 import type { GridData } from "@/lib/grid-data";
 import { addDays, type ISODate } from "@/lib/occupancy";
+import ToastStack, { type ToastMessage } from "@/components/ToastStack";
+import ContextMenu, { type ContextMenuItem, type ContextMenuState } from "@/components/ContextMenu";
 
 const COLUMN_WIDTH = 64;
 const ROOM_COL_WIDTH = 140;
@@ -31,6 +33,12 @@ function isWeekend(date: ISODate): boolean {
 
 function addDaysIso(date: ISODate, days: number): ISODate {
   return addDays(date, days);
+}
+
+interface UnassignedBooking {
+  guestName: string;
+  arrivalDate: string;
+  departureDate: string;
 }
 
 export default function GridCanvas({ initialData, today }: { initialData: GridData; today: ISODate }) {
@@ -198,6 +206,89 @@ export default function GridCanvas({ initialData, today }: { initialData: GridDa
     }
   }, []);
 
+  // --- Toasts -----------------------------------------------------------
+
+  const [toasts, setToasts] = useState<ToastMessage[]>([]);
+
+  function pushToast(text: string) {
+    const id = Date.now() + Math.random();
+    setToasts((prev) => [...prev, { id, text }]);
+    setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), 8000);
+  }
+
+  function dismissToast(id: number) {
+    setToasts((prev) => prev.filter((t) => t.id !== id));
+  }
+
+  function notifyUnassigned(unassignedBookings: UnassignedBooking[] | undefined) {
+    if (!unassignedBookings || unassignedBookings.length === 0) return;
+    const names = unassignedBookings.map((b) => `${b.guestName} (${b.arrivalDate} to ${b.departureDate})`).join(", ");
+    pushToast(
+      `This layout change conflicts with ${unassignedBookings.length} existing booking${unassignedBookings.length === 1 ? "" : "s"} — moved to unallocated: ${names}`
+    );
+  }
+
+  // --- Right-click lifecycle: join / switch / split ----------------------
+
+  const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
+
+  function openMenu(e: React.MouseEvent, title: string, items: ContextMenuItem[]) {
+    e.preventDefault();
+    e.stopPropagation();
+    setContextMenu({ x: e.clientX, y: e.clientY, title, items });
+  }
+
+  async function apiPost(url: string, body: unknown): Promise<{ unassignedBookings?: UnassignedBooking[] } | null> {
+    const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    if (!res.ok) {
+      const b = await res.json().catch(() => ({}));
+      setError(b.error ?? "Something went wrong.");
+      return null;
+    }
+    return res.json();
+  }
+
+  async function refreshCurrentWindow() {
+    await fetchWindow(data.start, data.days);
+  }
+
+  const actions = useMemo(
+    () => ({
+      openMenu,
+      async joinAsNew(bed1Id: number, bed2Id: number, mode: "double" | "solo", atDate: ISODate) {
+        const result = await apiPost("/api/joined-beds", { bed1Id, bed2Id, mode, startDate: atDate });
+        if (result) {
+          notifyUnassigned(result.unassignedBookings);
+          await refreshCurrentWindow();
+        }
+      },
+      async switchJoinMode(bed1Id: number, bed2Id: number, atDate: ISODate, mode: "double" | "solo") {
+        const result = await apiPost("/api/joined-beds/switch", { bed1Id, bed2Id, atDate, mode });
+        if (result) {
+          notifyUnassigned(result.unassignedBookings);
+          await refreshCurrentWindow();
+        }
+      },
+      async splitJoin(bed1Id: number, bed2Id: number, atDate: ISODate) {
+        const result = await apiPost("/api/joined-beds/split", { bed1Id, bed2Id, atDate });
+        if (result) await refreshCurrentWindow();
+      },
+      async goSolo(bedId: number, atDate: ISODate) {
+        const result = await apiPost("/api/bed-solo-periods", { bedId, startDate: atDate });
+        if (result) {
+          notifyUnassigned(result.unassignedBookings);
+          await refreshCurrentWindow();
+        }
+      },
+      async goCouple(bedId: number, atDate: ISODate) {
+        const result = await apiPost("/api/bed-solo-periods/split", { bedId, atDate });
+        if (result) await refreshCurrentWindow();
+      },
+    }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [data.start, data.days]
+  );
+
   // --- Visible-column geometry, shared by every row -------------------------
 
   const leadingWidth = virtualColumns[0]?.start ?? 0;
@@ -276,7 +367,7 @@ export default function GridCanvas({ initialData, today }: { initialData: GridDa
             ))}
 
             {data.grid.map((room, roomIndex) =>
-              renderRoomRows(room, roomIndex, visibleColumns, leadingWidth, trailingWidth)
+              renderRoomRows(room, roomIndex, visibleColumns, leadingWidth, trailingWidth, actions)
             )}
 
             <tr className="tr-grid-summary">
@@ -317,9 +408,8 @@ export default function GridCanvas({ initialData, today }: { initialData: GridDa
       </div>
 
       <p className="tr-muted" style={{ fontSize: 12, marginTop: 8 }}>
-        Drag anywhere on the grid to pan. Click a free cell to start a new booking. Greyed-out cells mean the bed
-        isn&apos;t placed in that room on that date. To move, add, or join beds, use{" "}
-        <a href="/settings/layout">Property Layout</a>.
+        Drag anywhere on the grid to pan. Click a free cell to start a new booking. Right-click a Single or Queen bed
+        row to join, switch, or split it. Greyed-out cells mean the bed isn&apos;t placed in that room on that date.
       </p>
 
       {data.alerts.length > 0 && (
@@ -337,6 +427,9 @@ export default function GridCanvas({ initialData, today }: { initialData: GridDa
           )}
         </div>
       )}
+
+      <ContextMenu state={contextMenu} onClose={() => setContextMenu(null)} />
+      <ToastStack toasts={toasts} onDismiss={dismissToast} />
     </>
   );
 }
@@ -351,19 +444,31 @@ type SlotCell = import("@/lib/grid").SlotCell;
 type GridUnit = import("@/lib/grid").GridUnit;
 type RoomGridRow = import("@/lib/grid").RoomGridRow;
 
+interface GridActions {
+  openMenu: (e: React.MouseEvent, title: string, items: ContextMenuItem[]) => void;
+  joinAsNew: (bed1Id: number, bed2Id: number, mode: "double" | "solo", atDate: ISODate) => void;
+  switchJoinMode: (bed1Id: number, bed2Id: number, atDate: ISODate, mode: "double" | "solo") => void;
+  splitJoin: (bed1Id: number, bed2Id: number, atDate: ISODate) => void;
+  goSolo: (bedId: number, atDate: ISODate) => void;
+  goCouple: (bedId: number, atDate: ISODate) => void;
+}
+
 /**
- * Renders one room's rows. A unit whose `partnerUnitKey` points at the very
- * next unit is a joined pair — rendered as one 2-row block so the two rows
- * can coordinate per date column (rowSpan-merge on "solo" dates, a single
- * chain icon on "double" dates). Everything else renders as before: one row
- * per bed, independent of its neighbours.
+ * Renders one room's rows. Three kinds of 2-row block get grouped together
+ * so their rows can coordinate per date column:
+ *   - an ACTUAL joined pair (`partnerUnitKey` points at the very next unit)
+ *   - a NATIVE two-person bed (Queen/1.5/Double — one unit, 2 slots already)
+ *   - two adjacent, still-independent Single beds — a "pairable" pair,
+ *     eligible to be linked via right-click but not yet joined
+ * Everything else renders as a plain single row per bed, as before.
  */
 function renderRoomRows(
   room: RoomGridRow,
   roomIndex: number,
   visibleColumns: VisibleColumn[],
   leadingWidth: number,
-  trailingWidth: number
+  trailingWidth: number,
+  actions: GridActions
 ) {
   const roomRowCount = room.units.reduce((sum, unit) => sum + unit.slots.length, 0);
   let roomRowsRendered = 0;
@@ -373,15 +478,31 @@ function renderRoomRows(
   for (let i = 0; i < units.length; i++) {
     const unit = units[i];
     const next = units[i + 1];
-    const isPair = unit.partnerUnitKey != null && next != null && next.key === unit.partnerUnitKey && unit.slots.length === 1 && next.slots.length === 1;
 
-    if (isPair) {
+    const isJoinedPair = unit.partnerUnitKey != null && next != null && next.key === unit.partnerUnitKey && unit.slots.length === 1 && next.slots.length === 1;
+    if (isJoinedPair) {
       const isFirstRoomRow = roomRowsRendered === 0;
-      rows.push(
-        ...renderPairedBlock(room, roomIndex, unit, next, isFirstRoomRow, roomRowCount, visibleColumns, leadingWidth, trailingWidth)
-      );
+      rows.push(...renderPairedBlock(room, roomIndex, unit, next, isFirstRoomRow, roomRowCount, visibleColumns, leadingWidth, trailingWidth, actions));
       roomRowsRendered += 2;
-      i += 1; // partner already consumed
+      i += 1;
+      continue;
+    }
+
+    const isNativePair = unit.slots.length === 2;
+    if (isNativePair) {
+      const isFirstRoomRow = roomRowsRendered === 0;
+      rows.push(...renderNativePairBlock(room, roomIndex, unit, isFirstRoomRow, roomRowCount, visibleColumns, leadingWidth, trailingWidth, actions));
+      roomRowsRendered += 2;
+      continue;
+    }
+
+    const isSingle = unit.label.toLowerCase() === "single";
+    const nextIsPairableSingle = !!next && next.partnerUnitKey == null && next.slots.length === 1 && next.label.toLowerCase() === "single";
+    if (isSingle && unit.partnerUnitKey == null && nextIsPairableSingle && next) {
+      const isFirstRoomRow = roomRowsRendered === 0;
+      rows.push(...renderPairableSinglesBlock(room, roomIndex, unit, next, isFirstRoomRow, roomRowCount, visibleColumns, leadingWidth, trailingWidth, actions));
+      roomRowsRendered += 2;
+      i += 1;
       continue;
     }
 
@@ -407,7 +528,7 @@ function renderRoomRows(
           {leadingWidth > 0 && <td style={{ width: leadingWidth }} />}
           {visibleColumns.map((col) => {
             const cell = col.dataIndex != null ? slot.cells[col.dataIndex] : null;
-            return renderGridCell(cell, col, unit.bedId, room.roomName, false);
+            return renderGridCell(cell, col, unit.bedId, room.roomName, {});
           })}
           {trailingWidth > 0 && <td style={{ width: trailingWidth }} />}
         </tr>
@@ -419,12 +540,16 @@ function renderRoomRows(
 }
 
 /**
- * A joined pair's two rows, decided per date column: "solo" dates rowSpan
- * unitA's cell down over unitB's (which omits its own cell there — that's
- * how HTML expects an irregular rowSpan to be built), showing one merged
- * "Solo Double" spot; every other date (unjoined, or "double" mode) renders
- * both cells independently, with a single chain icon on unitA's cell when
- * "double" mode is active that visually bridges into unitB's row below.
+ * An ACTUAL joined pair's two rows, decided per date column:
+ *   - "solo" dates rowSpan unitA's cell down over unitB's, showing one
+ *     merged "Solo Double" spot (unitB omits its own cell there — that's
+ *     how HTML expects an irregular rowSpan to be built).
+ *   - "double" dates render both cells independently with a dashed divider
+ *     on unitA's bottom border.
+ *   - dates with no active join at all (this window includes a stretch
+ *     before/after the join) render as plain independent cells with a
+ *     SOLID divider, and right-click offers starting a fresh join there —
+ *     same as two never-joined singles.
  */
 function renderPairedBlock(
   room: RoomGridRow,
@@ -435,7 +560,8 @@ function renderPairedBlock(
   roomRowCount: number,
   visibleColumns: VisibleColumn[],
   leadingWidth: number,
-  trailingWidth: number
+  trailingWidth: number,
+  actions: GridActions
 ) {
   const slotA = unitA.slots[0];
   const slotB = unitB.slots[0];
@@ -446,21 +572,44 @@ function renderPairedBlock(
   for (const col of visibleColumns) {
     const cellA = col.dataIndex != null ? slotA.cells[col.dataIndex] : null;
     const cellB = col.dataIndex != null ? slotB.cells[col.dataIndex] : null;
-    const soloActive = !!cellA?.joinBadge && !!cellB?.joinBadge && cellA.joinBadge.mode === "solo" && cellB.joinBadge.mode === "solo";
+    const mode = cellA?.joinBadge?.mode;
+    const soloActive = mode === "solo" && !!cellB?.joinBadge && cellB.joinBadge.mode === "solo";
+    const bothActive = cellA && cellA.state !== "inactive" && cellB && cellB.state !== "inactive";
 
     if (soloActive && cellA && cellB) {
       const primaryCell = cellA.joinBadge!.isPrimary ? cellA : cellB;
       const primaryBedId = cellA.joinBadge!.isPrimary ? unitA.bedId : unitB.bedId;
+      const menu: ContextMenuState["items"] = [
+        { label: "Switch to Couple Double", onClick: () => actions.switchJoinMode(unitA.bedId, unitB.bedId, col.date, "double") },
+        { label: "Split into Singles", onClick: () => actions.splitJoin(unitA.bedId, unitB.bedId, col.date), danger: true },
+      ];
       // The "Solo Double" label only needs to appear once at the start of a
       // run of merged dates — repeating it in every column was the clutter
       // being reported. The tint (tr-grid-solo-merged) alone carries the
       // state for the rest of the run.
-      rowACells.push(renderSoloMergedCell(primaryCell, col, primaryBedId, room.roomName, !previousWasSolo));
+      rowACells.push(
+        renderSoloMergedCell(primaryCell, col, primaryBedId, room.roomName, !previousWasSolo, actions, "Solo Double", menu)
+      );
       // unitB renders nothing here — consumed by unitA's rowSpan.
     } else {
-      const doubleActive = cellA?.joinBadge?.mode === "double";
-      rowACells.push(renderGridCell(cellA, col, unitA.bedId, room.roomName, doubleActive));
-      rowBCells.push(renderGridCell(cellB, col, unitB.bedId, room.roomName, false));
+      const menu: ContextMenuItem[] = mode
+        ? [
+            { label: mode === "double" ? "Switch to Solo Double" : "Switch to Couple Double", onClick: () => actions.switchJoinMode(unitA.bedId, unitB.bedId, col.date, mode === "double" ? "solo" : "double") },
+            { label: "Split into Singles", onClick: () => actions.splitJoin(unitA.bedId, unitB.bedId, col.date), danger: true },
+          ]
+        : [
+            { label: "Join as Couple Double", onClick: () => actions.joinAsNew(unitA.bedId, unitB.bedId, "double", col.date) },
+            { label: "Join as Solo Double", onClick: () => actions.joinAsNew(unitA.bedId, unitB.bedId, "solo", col.date) },
+          ];
+      const rowAMenu = bothActive ? { title: `${room.roomName} — Single beds`, items: menu } : undefined;
+      rowACells.push(
+        renderGridCell(cellA, col, unitA.bedId, room.roomName, {
+          dividerStyle: mode === "double" ? "dashed" : "solid",
+          menu: rowAMenu,
+          openMenu: actions.openMenu,
+        })
+      );
+      rowBCells.push(renderGridCell(cellB, col, unitB.bedId, room.roomName, {}));
     }
     previousWasSolo = soloActive;
   }
@@ -488,13 +637,158 @@ function renderPairedBlock(
 }
 
 /**
- * One merged "Solo Double" cell spanning both of a joined pair's rows for
- * one date. `showLabel` is only true on the first column of a visible
- * merged run — every other date just carries the tint, not the text, so a
- * long stretch of a Solo Double doesn't stamp "Solo Double" into every
- * single day.
+ * A native two-person bed's (Queen/1.5/Double) own 2 slots, decided per date
+ * column: "solo" dates merge into one row (rowSpan), everything else (the
+ * default) renders as 2 independent rows with a dashed divider — a Queen
+ * always sleeps 2 unless explicitly switched to solo.
  */
-function renderSoloMergedCell(cell: SlotCell, col: VisibleColumn, bedId: number, roomName: string, showLabel: boolean) {
+function renderNativePairBlock(
+  room: RoomGridRow,
+  roomIndex: number,
+  unit: GridUnit,
+  isFirstRoomRow: boolean,
+  roomRowCount: number,
+  visibleColumns: VisibleColumn[],
+  leadingWidth: number,
+  trailingWidth: number,
+  actions: GridActions
+) {
+  const slotA = unit.slots[0];
+  const slotB = unit.slots[1];
+  const rowACells: React.ReactNode[] = [];
+  const rowBCells: React.ReactNode[] = [];
+  let previousWasSolo = false;
+
+  for (const col of visibleColumns) {
+    const cellA = col.dataIndex != null ? slotA.cells[col.dataIndex] : null;
+    const cellB = col.dataIndex != null ? slotB.cells[col.dataIndex] : null;
+    const active = cellA && cellA.state !== "inactive";
+    const soloActive = active && col.dataIndex != null && !!unit.soloByDate?.[col.dataIndex];
+
+    if (soloActive && cellA) {
+      const menu: ContextMenuItem[] = [
+        { label: `Switch to Couple ${unit.label}`, onClick: () => actions.goCouple(unit.bedId, col.date), danger: true },
+      ];
+      rowACells.push(
+        renderSoloMergedCell(cellA, col, unit.bedId, room.roomName, !previousWasSolo, actions, `Solo ${unit.label}`, menu)
+      );
+    } else {
+      const menu: ContextMenuItem[] | undefined = active
+        ? [{ label: `Switch to Solo ${unit.label}`, onClick: () => actions.goSolo(unit.bedId, col.date) }]
+        : undefined;
+      rowACells.push(
+        renderGridCell(cellA, col, unit.bedId, room.roomName, {
+          dividerStyle: active ? "dashed" : undefined,
+          menu: menu ? { title: `${room.roomName} — ${unit.label}`, items: menu } : undefined,
+          openMenu: actions.openMenu,
+        })
+      );
+      rowBCells.push(renderGridCell(cellB, col, unit.bedId, room.roomName, {}));
+    }
+    previousWasSolo = !!soloActive;
+  }
+
+  return [
+    <tr key={`${unit.key}-native-a`} className={isFirstRoomRow ? "tr-grid-room-start" : undefined} style={roomColourStyle(roomIndex)}>
+      {isFirstRoomRow && (
+        <td className="tr-grid-room" style={ROOM_CELL_STYLE} rowSpan={roomRowCount}>
+          <div style={{ fontWeight: 600 }}>{room.roomName}</div>
+          <div className="tr-muted" style={{ fontSize: 11 }}>{room.floorName}</div>
+        </td>
+      )}
+      <td className="tr-grid-bed" style={BED_CELL_STYLE} rowSpan={1}>{unit.label}</td>
+      {leadingWidth > 0 && <td style={{ width: leadingWidth }} />}
+      {rowACells}
+      {trailingWidth > 0 && <td style={{ width: trailingWidth }} />}
+    </tr>,
+    <tr key={`${unit.key}-native-b`} style={roomColourStyle(roomIndex)}>
+      <td className="tr-grid-bed" style={BED_CELL_STYLE} rowSpan={1}>{unit.label}</td>
+      {leadingWidth > 0 && <td style={{ width: leadingWidth }} />}
+      {rowBCells}
+      {trailingWidth > 0 && <td style={{ width: trailingWidth }} />}
+    </tr>,
+  ];
+}
+
+/**
+ * Two adjacent Single beds that are NOT currently joined — always 2
+ * independent rows with a solid divider (never merges: nothing to merge
+ * until a join actually exists). Right-click on either row offers linking
+ * them into a Couple or Solo Double starting that date.
+ */
+function renderPairableSinglesBlock(
+  room: RoomGridRow,
+  roomIndex: number,
+  unitA: GridUnit,
+  unitB: GridUnit,
+  isFirstRoomRow: boolean,
+  roomRowCount: number,
+  visibleColumns: VisibleColumn[],
+  leadingWidth: number,
+  trailingWidth: number,
+  actions: GridActions
+) {
+  const slotA = unitA.slots[0];
+  const slotB = unitB.slots[0];
+  const rowACells: React.ReactNode[] = [];
+  const rowBCells: React.ReactNode[] = [];
+
+  for (const col of visibleColumns) {
+    const cellA = col.dataIndex != null ? slotA.cells[col.dataIndex] : null;
+    const cellB = col.dataIndex != null ? slotB.cells[col.dataIndex] : null;
+    const bothActive = cellA && cellA.state !== "inactive" && cellB && cellB.state !== "inactive";
+    const menu: ContextMenuItem[] = [
+      { label: "Join as Couple Double", onClick: () => actions.joinAsNew(unitA.bedId, unitB.bedId, "double", col.date) },
+      { label: "Join as Solo Double", onClick: () => actions.joinAsNew(unitA.bedId, unitB.bedId, "solo", col.date) },
+    ];
+    const sharedMenu = bothActive ? { title: `${room.roomName} — Single beds`, items: menu } : undefined;
+
+    rowACells.push(
+      renderGridCell(cellA, col, unitA.bedId, room.roomName, { dividerStyle: "solid", menu: sharedMenu, openMenu: actions.openMenu })
+    );
+    rowBCells.push(
+      renderGridCell(cellB, col, unitB.bedId, room.roomName, { menu: sharedMenu, openMenu: actions.openMenu })
+    );
+  }
+
+  return [
+    <tr key={`${unitA.key}-pairable`} className={isFirstRoomRow ? "tr-grid-room-start" : undefined} style={roomColourStyle(roomIndex)}>
+      {isFirstRoomRow && (
+        <td className="tr-grid-room" style={ROOM_CELL_STYLE} rowSpan={roomRowCount}>
+          <div style={{ fontWeight: 600 }}>{room.roomName}</div>
+          <div className="tr-muted" style={{ fontSize: 11 }}>{room.floorName}</div>
+        </td>
+      )}
+      <td className="tr-grid-bed" style={BED_CELL_STYLE} rowSpan={1}>{unitA.label}</td>
+      {leadingWidth > 0 && <td style={{ width: leadingWidth }} />}
+      {rowACells}
+      {trailingWidth > 0 && <td style={{ width: trailingWidth }} />}
+    </tr>,
+    <tr key={`${unitB.key}-pairable`} style={roomColourStyle(roomIndex)}>
+      <td className="tr-grid-bed" style={BED_CELL_STYLE} rowSpan={1}>{unitB.label}</td>
+      {leadingWidth > 0 && <td style={{ width: leadingWidth }} />}
+      {rowBCells}
+      {trailingWidth > 0 && <td style={{ width: trailingWidth }} />}
+    </tr>,
+  ];
+}
+
+/**
+ * One merged cell (e.g. "Solo Double" / "Solo Queen") spanning both of a
+ * pair's rows for one date. `showLabel` is only true on the first column of
+ * a visible merged run — every other date just carries the tint, not the
+ * text, so a long solo stretch doesn't stamp the label into every day.
+ */
+function renderSoloMergedCell(
+  cell: SlotCell,
+  col: VisibleColumn,
+  bedId: number,
+  roomName: string,
+  showLabel: boolean,
+  actions: GridActions,
+  label: string,
+  menuItems: ContextMenuItem[]
+) {
   const classes = ["tr-grid-cell", "tr-grid-solo-merged"];
   if (isWeekend(col.date)) classes.push("tr-grid-weekend");
   if (cell.state === "booked") {
@@ -511,9 +805,10 @@ function renderSoloMergedCell(cell: SlotCell, col: VisibleColumn, bedId: number,
       style={{ width: COLUMN_WIDTH, minWidth: COLUMN_WIDTH, maxWidth: COLUMN_WIDTH }}
       title={
         cell.state === "booked" && cell.booking
-          ? `${cell.booking.guestName} - ${formatDateUk(cell.booking.arrivalDate)} to ${formatDateUk(cell.booking.departureDate)} (Solo Double)`
-          : `New booking - ${roomName}, Solo Double, night of ${formatDateUk(col.date)}`
+          ? `${cell.booking.guestName} - ${formatDateUk(cell.booking.arrivalDate)} to ${formatDateUk(cell.booking.departureDate)} (${label})`
+          : `New booking - ${roomName}, ${label}, night of ${formatDateUk(col.date)}`
       }
+      onContextMenu={(e) => actions.openMenu(e, `${roomName} — ${label}`, menuItems)}
     >
       {cell.state === "booked" && cell.booking ? (
         <a href={`/bookings/${cell.booking.id}`} draggable={false}>
@@ -526,26 +821,37 @@ function renderSoloMergedCell(cell: SlotCell, col: VisibleColumn, bedId: number,
           draggable={false}
           href={`/bookings/new?bedId=${bedId}&arrival=${col.date}&departure=${addDaysIso(col.date, 1)}`}
         >
-          {showLabel ? "Solo Double" : "+"}
+          {showLabel ? label : "+"}
         </a>
       )}
     </td>
   );
 }
 
-function renderGridCell(
-  cell: SlotCell | null,
-  col: VisibleColumn,
-  bedId: number,
-  roomName: string,
-  showChainIcon: boolean
-) {
+interface CellOptions {
+  /** Border-bottom treatment — set only on the "top" row of a 2-row block. */
+  dividerStyle?: "solid" | "dashed";
+  menu?: { title: string; items: ContextMenuItem[] };
+  openMenu?: (e: React.MouseEvent, title: string, items: ContextMenuItem[]) => void;
+}
+
+function renderGridCell(cell: SlotCell | null, col: VisibleColumn, bedId: number, roomName: string, options: CellOptions) {
+  const dividerClass = options.dividerStyle === "dashed" ? "tr-grid-divider-dashed" : options.dividerStyle === "solid" ? "tr-grid-divider-solid" : "";
+
   if (!cell) {
-    return <td key={col.globalIndex} className="tr-grid-cell tr-grid-inactive" style={{ width: COLUMN_WIDTH, minWidth: COLUMN_WIDTH, maxWidth: COLUMN_WIDTH }} title="Loading…" />;
+    return (
+      <td
+        key={col.globalIndex}
+        className={["tr-grid-cell", "tr-grid-inactive", dividerClass].filter(Boolean).join(" ")}
+        style={{ width: COLUMN_WIDTH, minWidth: COLUMN_WIDTH, maxWidth: COLUMN_WIDTH }}
+        title="Loading…"
+      />
+    );
   }
 
   const classes = ["tr-grid-cell"];
   if (isWeekend(col.date)) classes.push("tr-grid-weekend");
+  if (dividerClass) classes.push(dividerClass);
 
   if (cell.state === "inactive") {
     classes.push("tr-grid-inactive");
@@ -555,16 +861,9 @@ function renderGridCell(
     if (cell.isDeparture) classes.push("tr-grid-departure");
   }
 
-  // A single chain icon hugging this cell's bottom edge, reading as a bridge
-  // toward the joined bed's row directly below — only ever rendered once per
-  // date (on the top row of the pair), never duplicated on the row below.
-  // Kept fully inside the cell's own box (no negative offset past the
-  // border): CSS table layout doesn't reliably let a cell's content overflow
-  // into the row below regardless of `overflow: visible`, so anything that
-  // tried to literally straddle the line ended up half-clipped.
-  const chainIcon = showChainIcon ? (
-    <span className="tr-grid-chain" aria-hidden="true">🔗</span>
-  ) : null;
+  const onContextMenu = options.menu && options.openMenu
+    ? (e: React.MouseEvent) => options.openMenu!(e, options.menu!.title, options.menu!.items)
+    : undefined;
 
   if (cell.state === "inactive") {
     return (
@@ -582,6 +881,7 @@ function renderGridCell(
       key={col.globalIndex}
       className={classes.join(" ")}
       style={{ width: COLUMN_WIDTH, minWidth: COLUMN_WIDTH, maxWidth: COLUMN_WIDTH }}
+      onContextMenu={onContextMenu}
       title={
         cell.state === "booked" && cell.booking
           ? `${cell.booking.guestName} - ${formatDateUk(cell.booking.arrivalDate)} to ${formatDateUk(cell.booking.departureDate)}`
@@ -598,7 +898,6 @@ function renderGridCell(
           +
         </a>
       )}
-      {chainIcon}
     </td>
   );
 }

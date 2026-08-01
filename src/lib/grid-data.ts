@@ -1,10 +1,11 @@
 import { db } from "@/db";
-import { beds, bedLocations, bookings, floors, joinedBeds, rooms } from "@/db/schema";
+import { beds, bedLocations, bedSoloPeriods, bookings, floors, joinedBeds, rooms } from "@/db/schema";
 import { and, eq, gt, isNull, lt, or } from "drizzle-orm";
 import {
   buildRoomGrid,
   capacityByDate,
   type BedLocationSegment,
+  type BedSoloSegment,
   type GridBedInfo,
   type GridBooking,
   type JoinSegment,
@@ -36,7 +37,7 @@ export async function loadGridData(start: ISODate, days: number): Promise<GridDa
   const lastDate = dates[dates.length - 1];
   const windowEnd = addDays(start, days); // exclusive
 
-  const [floorRows, roomRows, allBeds, locationRows, joinRows, eventList] = await Promise.all([
+  const [floorRows, roomRows, allBeds, locationRows, joinRows, soloRows, eventList] = await Promise.all([
     db.select().from(floors),
     db.select().from(rooms),
     db.select({ id: beds.id, type: beds.type }).from(beds),
@@ -59,6 +60,14 @@ export async function loadGridData(start: ISODate, days: number): Promise<GridDa
       })
       .from(joinedBeds)
       .where(and(lt(joinedBeds.startDate, windowEnd), or(isNull(joinedBeds.endDate), gt(joinedBeds.endDate, start)))),
+    db
+      .select({
+        bedId: bedSoloPeriods.bedId,
+        startDate: bedSoloPeriods.startDate,
+        endDate: bedSoloPeriods.endDate,
+      })
+      .from(bedSoloPeriods)
+      .where(and(lt(bedSoloPeriods.startDate, windowEnd), or(isNull(bedSoloPeriods.endDate), gt(bedSoloPeriods.endDate, start)))),
     eventsInRange(start, lastDate),
   ]);
 
@@ -70,6 +79,7 @@ export async function loadGridData(start: ISODate, days: number): Promise<GridDa
   const gridBedInfos: GridBedInfo[] = allBeds.map((b) => ({ bedId: b.id, type: b.type }));
   const gridLocationSegments: BedLocationSegment[] = locationRows;
   const gridJoinSegments: JoinSegment[] = joinRows;
+  const gridSoloSegments: BedSoloSegment[] = soloRows;
 
   const bookingRows = await db
     .select({
@@ -87,7 +97,7 @@ export async function loadGridData(start: ISODate, days: number): Promise<GridDa
     .filter((b): b is typeof b & { bedId: number } => b.bedId != null)
     .map((b) => ({ ...b }));
 
-  const grid = buildRoomGrid(dates, roomsForGrid, gridBedInfos, gridLocationSegments, gridJoinSegments, gridBookings);
+  const grid = buildRoomGrid(dates, roomsForGrid, gridBedInfos, gridLocationSegments, gridJoinSegments, gridSoloSegments, gridBookings);
   const { occupied: occupiedByDate, total: totalByDate } = capacityByDate(dates, grid);
   const eventLanes = layoutEventLanes(dates, eventList);
 

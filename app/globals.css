@@ -792,27 +792,19 @@ button:hover {
   );
 }
 
-/* A single tiny chain icon hugging the bottom edge of a "double" joined
-   pair's top-row cell — lives only there (never the bottom row's, so it can
-   never be duplicated) and stays fully INSIDE that cell's own box (no
-   negative offset past the border). CSS table layout doesn't reliably let a
-   cell's content spill into the row below no matter what its own overflow
-   is set to, so an icon positioned to literally straddle the line ends up
-   half-clipped — sitting just above the border reads as "belongs to this
-   row, points at its partner below" without fighting that.
-   Deliberately no z-index: the sticky Room/Bed columns (z-index: 1) must
-   always paint over it, or the icon shows through them when a date column
-   scrolls in underneath — no z-index here leaves it in normal paint order,
-   which sits below anything actually raised above the flow. */
-.tr-grid-chain {
-  position: absolute;
-  left: 50%;
-  bottom: 2px;
-  transform: translateX(-50%);
-  font-size: 10px;
-  line-height: 1;
-  pointer-events: none;
-  opacity: 0.9;
+/* Divider line between a 2-row bed block's top and bottom cell, applied to
+   the top row's bottom border only. Solid = independent/unjoined (default).
+   Dashed = coupled — two singles strapped into a "Couple Double", or a
+   native Queen/1.5/Double bed in its default 2-person state. Replaces the
+   old chain-icon approach: a border can't suffer the cross-row content
+   clipping the icon did, and it reads as one continuous visual language
+   across both the joined-singles and native-bed cases. */
+.tr-grid-divider-solid {
+  border-bottom: 2px solid #b9b9b2;
+}
+
+.tr-grid-divider-dashed {
+  border-bottom: 2px dashed var(--tr-accent);
 }
 
 /* A "Solo Double" cell spanning both of a joined pair's rows for one date —
@@ -991,6 +983,54 @@ button:hover {
   font-size: 26px;
   font-weight: 700;
   color: var(--tr-accent);
+}
+
+/* -------------------------------------------------------------------------
+   Right-click context menu (grid bed join/switch/split lifecycle).
+   position: fixed, not absolute — see ContextMenu.tsx for why.
+   ------------------------------------------------------------------------- */
+
+.tr-context-menu {
+  position: fixed;
+  z-index: 1000;
+  min-width: 200px;
+  background: var(--tr-surface, #fff);
+  border: 1px solid #cfc9ba;
+  border-radius: 6px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.22);
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+}
+
+.tr-context-menu-title {
+  padding: 6px 10px 4px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--tr-muted-text, #8a8578);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.tr-context-menu-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 7px 10px;
+  border: none;
+  background: none;
+  border-radius: 4px;
+  font-size: 13px;
+  cursor: pointer;
+  color: inherit;
+}
+
+.tr-context-menu-item:hover {
+  background-color: var(--tr-room-tint, #f0ede4);
+}
+
+.tr-context-menu-item-danger {
+  color: #b3312d;
 }
 
 @media (max-width: 900px) {

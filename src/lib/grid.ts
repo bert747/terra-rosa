@@ -64,6 +64,13 @@ export interface JoinSegment {
   mode: "double" | "solo";
 }
 
+/** One stint a native two-person bed (Queen/1.5/Double) was sold solo, straight from bed_solo_periods. */
+export interface BedSoloSegment {
+  bedId: number;
+  startDate: ISODate;
+  endDate: ISODate | null;
+}
+
 export interface JoinBadge {
   partnerBedId: number;
   mode: "double" | "solo";
@@ -99,6 +106,14 @@ export interface GridUnit {
    * behaviour still comes from each cell's own `joinBadge`, not from this.
    */
   partnerUnitKey?: string;
+  /**
+   * Set only on a native two-person bed (Queen/1.5/Double — `slots.length
+   * === 2` on its own, no partner unit). Per-date, aligned with `dates`:
+   * true means this date is sold "solo" — the renderer merges the unit's
+   * own 2 slots into one row for that column. Undefined for capacity-1
+   * units and for joined-pair units (those use `joinBadge` instead).
+   */
+  soloByDate?: boolean[];
 }
 
 export interface RoomGridRow {
@@ -228,6 +243,7 @@ export function buildRoomGrid(
   bedInfos: GridBedInfo[],
   locationSegments: BedLocationSegment[],
   joinSegments: JoinSegment[],
+  soloSegments: BedSoloSegment[],
   bookings: GridBooking[]
 ): RoomGridRow[] {
   const bedTypeById = new Map(bedInfos.map((b) => [b.bedId, b.type]));
@@ -277,6 +293,18 @@ export function buildRoomGrid(
     else bookingsByBed.set(booking.bedId, [booking]);
   }
 
+  // bedId -> solo-active[dateIndex], for native two-person beds. No
+  // co-location check needed here (unlike joins) — a solo period only ever
+  // concerns the one bed.
+  const soloByBed = new Map<number, boolean[]>();
+  for (const seg of soloSegments) {
+    const arr = soloByBed.get(seg.bedId) ?? new Array(dates.length).fill(false);
+    dates.forEach((d, i) => {
+      if (coversDate(seg.startDate, seg.endDate, d)) arr[i] = true;
+    });
+    soloByBed.set(seg.bedId, arr);
+  }
+
   const unitsByRoom = new Map<number, GridUnit[]>();
 
   for (const [key, active] of activeByBedRoom) {
@@ -303,11 +331,29 @@ export function buildRoomGrid(
       });
     }
 
+    // A native two-person bed (never appears in joinSegments — joins are
+    // Single-only, enforced when a join is created) can independently be
+    // sold solo. Blocking the second slot reuses the same capacity/render
+    // signal a joined pair's secondary bed uses.
+    let soloByDate: boolean[] | undefined;
+    if (!joinStatus && capacity === 2) {
+      const solo = soloByBed.get(bedId);
+      if (solo?.some(Boolean)) {
+        soloByDate = solo;
+        dates.forEach((_, i) => {
+          if (!solo[i]) return;
+          const cell = slotCells[1]?.[i];
+          if (cell && cell.state === "free") cell.blockedBySoloJoin = true;
+        });
+      }
+    }
+
     const unit: GridUnit = {
       key,
       bedId,
       label: type,
       slots: slotCells.map((cells) => ({ cells })),
+      ...(soloByDate ? { soloByDate } : {}),
     };
 
     const list = unitsByRoom.get(roomId);
