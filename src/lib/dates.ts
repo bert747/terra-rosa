@@ -5,6 +5,31 @@ export function formatDateUk(isoDate: string | null | undefined): string {
   return `${m[3]}/${m[2]}/${m[1]}`;
 }
 
+const WEEKDAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+const MONTH_NAMES = [
+  "January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December",
+];
+
+function ordinal(day: number): string {
+  if (day >= 11 && day <= 13) return `${day}th`;
+  switch (day % 10) {
+    case 1: return `${day}st`;
+    case 2: return `${day}nd`;
+    case 3: return `${day}rd`;
+    default: return `${day}th`;
+  }
+}
+
+/** e.g. "Sunday 2nd August" — for headings, not for anything parsed back. */
+export function formatDateWithWeekday(isoDate: string | null | undefined): string {
+  if (!isoDate || !isIsoDate(isoDate)) return "";
+  const d = new Date(`${isoDate}T00:00:00Z`);
+  const weekday = WEEKDAY_NAMES[d.getUTCDay()];
+  const month = MONTH_NAMES[d.getUTCMonth()];
+  return `${weekday} ${ordinal(d.getUTCDate())} ${month}`;
+}
+
 export function parseUkDateToIso(input: string): string | null {
   const raw = input.trim();
   const m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(raw);

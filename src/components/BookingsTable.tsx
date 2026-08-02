@@ -8,6 +8,7 @@ export interface BookingRow {
   roomName: string;
   arrivalDate: string;
   departureDate: string;
+  stayLength: string;
   sleepsNear: string;
   bedType: string;
   guestType: string;
@@ -24,6 +25,7 @@ const DEFAULT_COLUMNS: Column[] = [
   { key: "roomName", label: "Room" },
   { key: "arrivalDate", label: "Arrival" },
   { key: "departureDate", label: "Departure" },
+  { key: "stayLength", label: "Nights" },
   { key: "sleepsNear", label: "Sleeps near" },
   { key: "bedType", label: "Bed Type" },
   { key: "guestType", label: "Guest Type" },
@@ -151,6 +153,8 @@ export default function BookingsTable({ rows }: { rows: BookingRow[] }) {
                   opacity: dragKey === col.key ? 0.4 : 1,
                   background: dragOverKey === col.key && dragKey !== col.key ? "var(--tr-accent-soft)" : undefined,
                   boxShadow: dragOverKey === col.key && dragKey !== col.key ? "inset 2px 0 0 var(--tr-accent)" : undefined,
+                  width: col.key === "stayLength" ? 1 : undefined,
+                  whiteSpace: col.key === "stayLength" ? "nowrap" : undefined,
                 }}
                 title="Drag to reorder columns"
               >
@@ -189,7 +193,11 @@ export default function BookingsTable({ rows }: { rows: BookingRow[] }) {
           {sortedRows.map((row) => (
             <tr key={row.id} className="tr-row-link">
               {columns.map((col) => (
-                <td key={col.key} title={col.key === "dietary" ? row.dietary : undefined}>
+                <td
+                  key={col.key}
+                  title={col.key === "dietary" ? row.dietary : undefined}
+                  style={col.key === "stayLength" ? { width: 1, whiteSpace: "nowrap", textAlign: "center" } : undefined}
+                >
                   <a className="tr-cell-link" href={`/bookings/${row.id}`}>
                     {row[col.key]}
                   </a>

@@ -1,7 +1,7 @@
 import { db } from "@/db";
 import { desc } from "drizzle-orm";
 import { beds, bedLocations, bedSoloPeriods, bookings, joinedBeds, rooms } from "@/db/schema";
-import { formatDateUk } from "@/lib/dates";
+import { formatDateUk, nightsBetween } from "@/lib/dates";
 import BookingsTable, { type BookingRow } from "@/components/BookingsTable";
 
 export const dynamic = "force-dynamic";
@@ -71,6 +71,7 @@ export default async function BookingsPage() {
       roomName: roomNameForBooking(b.bedId, b.arrivalDate),
       arrivalDate: formatDateUk(b.arrivalDate),
       departureDate: formatDateUk(b.departureDate),
+      stayLength: String(nightsBetween(b.arrivalDate, b.departureDate)),
       sleepsNear: b.linkedBookingId != null ? guestNameById.get(b.linkedBookingId) ?? "—" : "—",
       bedType: bedTypeForBooking(b.bedId, b.arrivalDate),
       guestType: GUEST_TYPE_LABELS[b.guestType] ?? b.guestType,

@@ -1385,3 +1385,31 @@ button:hover {
     grid-template-columns: 1fr;
   }
 }
+
+.tr-print-only {
+  display: none;
+}
+
+@media print {
+  .tr-no-print {
+    display: none !important;
+  }
+
+  .tr-print-only {
+    display: inline;
+  }
+
+  html,
+  body {
+    background: none;
+  }
+
+  .tr-shell {
+    padding: 0;
+  }
+
+  .tr-card {
+    border: none;
+    box-shadow: none;
+  }
+}

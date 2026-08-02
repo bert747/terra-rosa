@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { addDays, type ISODate } from "@/lib/occupancy";
+import { formatDateWithWeekday } from "@/lib/dates";
 import DateField from "@/components/DateField";
 
 function todayIso(): ISODate {
@@ -39,12 +40,18 @@ export default function HousekeepingDailySheetPage() {
   return (
     <div className="tr-shell">
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
-        <h1 className="tr-page-title" style={{ margin: 0 }}>Housekeeping Daily Sheet</h1>
+        <h1 className="tr-page-title" style={{ margin: 0 }}>
+          Housekeeping Daily Sheet
+          <span className="tr-muted" style={{ fontWeight: 400, fontSize: 14, marginLeft: 8 }}>
+            — {formatDateWithWeekday(date)}
+          </span>
+        </h1>
         <span style={{ flex: 1 }} />
-        <button type="button" onClick={() => setDate(addDays(date, -1))}>← Prev day</button>
-        <DateField value={date} onChange={(iso) => iso && setDate(iso)} />
-        <button type="button" onClick={() => setDate(todayIso())}>Today</button>
-        <button type="button" onClick={() => setDate(addDays(date, 1))}>Next day →</button>
+        <button type="button" className="tr-no-print" onClick={() => setDate(addDays(date, -1))}>← Prev day</button>
+        <span className="tr-no-print"><DateField value={date} onChange={(iso) => iso && setDate(iso)} /></span>
+        <button type="button" className="tr-no-print" onClick={() => setDate(todayIso())}>Today</button>
+        <button type="button" className="tr-no-print" onClick={() => setDate(addDays(date, 1))}>Next day →</button>
+        <button type="button" className="tr-no-print primary" onClick={() => window.print()}>Print / Export</button>
       </div>
 
       {loading && <p className="tr-muted" style={{ fontSize: 12, marginTop: 0, marginBottom: 16 }}>Loading…</p>}

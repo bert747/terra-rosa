@@ -1,12 +1,15 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { formatDateUk } from "@/lib/dates";
+import { formatDateUk, nightsBetween } from "@/lib/dates";
 import { addDays, type ISODate } from "@/lib/occupancy";
 import { guestsForMeal, aggregateDietaryTags, type MealBooking, type MealType } from "@/lib/kitchen";
+import DateField from "@/components/DateField";
 
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-const WINDOW_DAYS = 7;
+const DEFAULT_WINDOW_DAYS = 7;
+// Guards against an accidental multi-year range rendering a huge table.
+const MAX_WINDOW_DAYS = 62;
 const MEALS: { key: MealType; label: string }[] = [
   { key: "breakfast", label: "Breakfast" },
   { key: "lunch", label: "Lunch" },
@@ -28,7 +31,8 @@ interface DailyNote {
 }
 
 export default function KitchenPrepMatrixPage() {
-  const [windowStart, setWindowStart] = useState<ISODate>(todayIso);
+  const [fromDate, setFromDate] = useState<ISODate>(todayIso);
+  const [toDate, setToDate] = useState<ISODate>(() => addDays(todayIso(), DEFAULT_WINDOW_DAYS - 1));
   const [bookings, setBookings] = useState<MealBooking[]>([]);
   const [notesByDate, setNotesByDate] = useState<Map<ISODate, DailyNote>>(new Map());
   const [noteModalDate, setNoteModalDate] = useState<ISODate | null>(null);
@@ -50,10 +54,21 @@ export default function KitchenPrepMatrixPage() {
     loadNotes();
   }, []);
 
-  const dates = useMemo(
-    () => Array.from({ length: WINDOW_DAYS }, (_, i) => addDays(windowStart, i)),
-    [windowStart]
-  );
+  const dates = useMemo(() => {
+    const span = Math.min(MAX_WINDOW_DAYS, Math.max(1, nightsBetween(fromDate, toDate) + 1));
+    return Array.from({ length: span }, (_, i) => addDays(fromDate, i));
+  }, [fromDate, toDate]);
+
+  function shiftRange(days: number) {
+    setFromDate((d) => addDays(d, days));
+    setToDate((d) => addDays(d, days));
+  }
+
+  function resetToToday() {
+    const start = todayIso();
+    setFromDate(start);
+    setToDate(addDays(start, DEFAULT_WINDOW_DAYS - 1));
+  }
 
   function openNoteModal(date: ISODate) {
     setNoteModalDate(date);
@@ -77,11 +92,22 @@ export default function KitchenPrepMatrixPage() {
   return (
     <div className="tr-shell">
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
-        <h1 className="tr-page-title" style={{ margin: 0 }}>Kitchen Prep Matrix</h1>
+        <h1 className="tr-page-title" style={{ margin: 0 }}>
+          Kitchen Prep Matrix
+          <span className="tr-print-only" style={{ fontWeight: 400, fontSize: 14, marginLeft: 8 }}>
+            — {formatDateUk(fromDate)} to {formatDateUk(toDate)}
+          </span>
+        </h1>
         <span style={{ flex: 1 }} />
-        <button type="button" onClick={() => setWindowStart(addDays(windowStart, -WINDOW_DAYS))}>← Prev week</button>
-        <button type="button" onClick={() => setWindowStart(todayIso())}>Today</button>
-        <button type="button" onClick={() => setWindowStart(addDays(windowStart, WINDOW_DAYS))}>Next week →</button>
+        <span className="tr-no-print" style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+          <DateField value={fromDate} onChange={(iso) => iso && setFromDate(iso)} />
+          <span className="tr-muted">to</span>
+          <DateField value={toDate} onChange={(iso) => iso && setToDate(iso)} />
+        </span>
+        <button type="button" className="tr-no-print" onClick={() => shiftRange(-dates.length)}>← Prev</button>
+        <button type="button" className="tr-no-print" onClick={resetToToday}>Today</button>
+        <button type="button" className="tr-no-print" onClick={() => shiftRange(dates.length)}>Next →</button>
+        <button type="button" className="tr-no-print primary" onClick={() => window.print()}>Print / Export</button>
       </div>
 
       <div className="tr-card" style={{ overflowX: "auto" }}>
@@ -96,6 +122,7 @@ export default function KitchenPrepMatrixPage() {
                     <div>{weekday(date)} {formatDateUk(date).slice(0, 5)}</div>
                     <button
                       type="button"
+                      className="tr-no-print"
                       onClick={() => openNoteModal(date)}
                       style={{
                         marginTop: 4,

@@ -21,7 +21,7 @@ export default async function Nav() {
   const user = await getCurrentUser();
 
   return (
-    <nav className="tr-nav">
+    <nav className="tr-nav tr-no-print">
       <div className="tr-nav-left">
         <BackButton />
         <strong className="tr-nav-brand">Terra Rosa</strong>
