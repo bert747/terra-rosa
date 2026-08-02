@@ -3,7 +3,7 @@ import { db } from "@/db";
 import { beds, bedSoloPeriods, bookings } from "@/db/schema";
 import { requireEditor } from "@/lib/auth";
 import { and, eq, gt, isNull, lt, or } from "drizzle-orm";
-import { bedCapacity } from "@/lib/bed-types";
+import { loadBedCapacities } from "@/lib/bed-types";
 
 export const dynamic = "force-dynamic";
 
@@ -51,7 +51,8 @@ export async function POST(req: NextRequest) {
 
   const [bed] = await db.select().from(beds).where(eq(beds.id, bedId));
   if (!bed) return NextResponse.json({ error: "Bed not found" }, { status: 404 });
-  if (bedCapacity(bed.type) !== 2) {
+  const capacities = await loadBedCapacities();
+  if ((capacities.get(bed.type) ?? 1) !== 2) {
     return NextResponse.json({ error: "Only a native two-person bed (Queen, 1.5, Double) can go solo" }, { status: 400 });
   }
 

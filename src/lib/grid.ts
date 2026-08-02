@@ -1,5 +1,4 @@
 import type { ISODate } from "@/lib/occupancy";
-import { bedCapacity } from "@/lib/bed-types";
 
 // ---------------------------------------------------------------------------
 // Time-aware grid layout.
@@ -37,7 +36,6 @@ export interface GridBooking {
   arrivalDate: ISODate;
   /** Exclusive: the guest's last night is the day before this date. */
   departureDate: ISODate;
-  groupId: string | null;
   bedId: number;
 }
 
@@ -86,6 +84,17 @@ export interface SlotCell {
   /** True on a "free" cell that's the non-bookable half of a Solo Double. */
   blockedBySoloJoin?: boolean;
   joinBadge?: JoinBadge | null;
+  /**
+   * A DIFFERENT booking (from `booking`, if any) whose departureDate is this
+   * exact date — checkout is exclusive of that date already (the guest's
+   * last occupied night is the day before), so this date's own cell is
+   * otherwise just "free" or a new arrival's cell, never `booking` itself.
+   * Lets the renderer draw a same-day checkout's pill "tail" alongside
+   * whatever this cell would already show (a new arrival's pill, or the
+   * ordinary "+" new-booking affordance) instead of the outgoing stay
+   * simply vanishing a day early.
+   */
+  departingBooking?: GridBooking;
 }
 
 export interface UnitSlot {
@@ -121,6 +130,8 @@ export interface RoomGridRow {
   roomName: string;
   floorId: number;
   floorName: string;
+  /** True only for the system "Dorm Storage" room — see rooms.excludeFromCapacity. */
+  excludeFromCapacity: boolean;
   units: GridUnit[];
 }
 
@@ -154,6 +165,12 @@ function packBookingsIntoSlots(
     (a, b) => a.arrivalDate.localeCompare(b.arrivalDate) || a.id - b.id
   );
 
+  // Which slot each booking landed in — needed below to stamp its
+  // departingBooking annotation onto the SAME slot's departure-date cell
+  // (that date itself is never part of `dateIndexes`, the exclusive-end
+  // occupied range, so it's tracked separately from the main pack loop).
+  const bookingSlot = new Map<number, number>();
+
   for (const booking of ordered) {
     const dateIndexes: number[] = [];
     dates.forEach((d, i) => {
@@ -172,6 +189,7 @@ function packBookingsIntoSlots(
         slots.push(dates.map((_, i) => ({ state: active[i] ? "free" : "inactive" }) as SlotCell));
       }
     }
+    bookingSlot.set(booking.id, slotIndex);
     for (const i of dateIndexes) {
       slots[slotIndex][i] = {
         state: "booked",
@@ -180,6 +198,20 @@ function packBookingsIntoSlots(
         isDeparture: nextDayLocal(dates[i]) === booking.departureDate,
       };
     }
+  }
+
+  // Second pass: annotate whichever cell falls exactly on each booking's own
+  // departureDate (in its own slot) with a same-day-checkout marker — that
+  // date's cell already renders as "free" or a new arrival's "booked" cell
+  // from the loop above, and this doesn't change either, only adds a
+  // render hint for the pill's half-cell "tail" (see renderBookingPill /
+  // renderSingleCell in GridCanvas.tsx).
+  for (const booking of ordered) {
+    const slotIndex = bookingSlot.get(booking.id);
+    if (slotIndex == null) continue;
+    const i = dates.findIndex((d) => d === booking.departureDate);
+    if (i === -1 || !active[i]) continue;
+    slots[slotIndex][i] = { ...slots[slotIndex][i], departingBooking: booking };
   }
 
   return slots;
@@ -236,15 +268,61 @@ function reorderJoinedPairs(units: GridUnit[], joinSegments: JoinSegment[], wind
   return result;
 }
 
+function unitSortBucket(unit: GridUnit): number {
+  if (unit.slots.length === 2) return 2; // native two-person bed (1.5/Queen/Double)
+  if (unit.partnerUnitKey != null) return 1; // joined single pair (Couple/Solo Double)
+  return 0; // plain unjoined single (or any other capacity-1 unit)
+}
+
+/**
+ * A joined pair's sort key is the SMALLER of its two bedIds, so a whole pair
+ * sorts as one block relative to other beds/pairs in the room, rather than
+ * each half sorting independently by its own id (which — since
+ * Array.prototype.sort is stable and reorderJoinedPairs already places a
+ * pair's two units back-to-back — would otherwise let a room with two or
+ * more joined pairs interleave them, e.g. [bed1, bed4] and [bed2, bed5]
+ * sorting to [bed1, bed2, bed4, bed5] and splitting each pair apart).
+ */
+function unitSortKeyBedId(unit: GridUnit, byKey: Map<string, GridUnit>): number {
+  if (unit.partnerUnitKey == null) return unit.bedId;
+  const partner = byKey.get(unit.partnerUnitKey);
+  return partner ? Math.min(unit.bedId, partner.bedId) : unit.bedId;
+}
+
+/**
+ * Forces a consistent within-room bed order: unjoined singles, then joined
+ * single pairs (Couple/Solo Doubles), then native two-person beds (1.5/
+ * Queen/Double). Must run AFTER reorderJoinedPairs so partnerUnitKey is
+ * already set. Ties break on bedId ascending — NOT original array order,
+ * which just reflects whatever order the unordered bed_locations query
+ * happened to return and has no relation to "top of the room" — so beds
+ * fill top-down (bed 1 before bed 2) deterministically regardless of DB row
+ * order. Bed order is fixed by bedId alone (not occupancy), so a bed never
+ * moves position as it gets booked/freed — bookings fill the room from the
+ * top down instead of occupied beds sinking toward the bottom. Sort is
+ * stable and a joined pair's key is its lower bedId (see
+ * unitSortKeyBedId), so reorderJoinedPairs' adjacency is preserved even
+ * with multiple pairs in one room.
+ */
+function sortRoomUnits(units: GridUnit[]): GridUnit[] {
+  const byKey = new Map(units.map((u) => [u.key, u]));
+  return units
+    .map((unit) => ({ unit, bucket: unitSortBucket(unit), sortBedId: unitSortKeyBedId(unit, byKey) }))
+    .sort((a, b) => a.bucket - b.bucket || a.sortBedId - b.sortBedId)
+    .map((entry) => entry.unit);
+}
+
 /** Builds the full time-aware grid for the given date window. */
 export function buildRoomGrid(
   dates: ISODate[],
-  rooms: Array<{ id: number; name: string; floorId: number; floorName: string }>,
+  rooms: Array<{ id: number; name: string; floorId: number; floorName: string; excludeFromCapacity: boolean }>,
   bedInfos: GridBedInfo[],
   locationSegments: BedLocationSegment[],
   joinSegments: JoinSegment[],
   soloSegments: BedSoloSegment[],
-  bookings: GridBooking[]
+  bookings: GridBooking[],
+  /** type name -> capacity (guests it sleeps) — see loadBedCapacities() in bed-types.ts. */
+  capacities: Map<string, number>
 ): RoomGridRow[] {
   const bedTypeById = new Map(bedInfos.map((b) => [b.bedId, b.type]));
 
@@ -313,7 +391,7 @@ export function buildRoomGrid(
     const bedId = Number(bedIdStr);
     const roomId = Number(roomIdStr);
     const type = bedTypeById.get(bedId) ?? "Single";
-    const capacity = bedCapacity(type);
+    const capacity = capacities.get(type) ?? 1;
     const joinStatus = joinStatusByBed.get(bedId);
 
     const slotCells = packBookingsIntoSlots(dates, active, bookingsByBed.get(bedId) ?? [], capacity);
@@ -371,10 +449,12 @@ export function buildRoomGrid(
       roomName: room.name,
       floorId: room.floorId,
       floorName: room.floorName,
-      units:
+      excludeFromCapacity: room.excludeFromCapacity,
+      units: sortRoomUnits(
         dates.length > 0
           ? reorderJoinedPairs(unitsByRoom.get(room.id) ?? [], joinSegments, windowStart, windowEndExclusive)
-          : unitsByRoom.get(room.id) ?? [],
+          : unitsByRoom.get(room.id) ?? []
+      ),
     }));
 }
 
@@ -384,6 +464,9 @@ export function capacityByDate(dates: ISODate[], grid: RoomGridRow[]): CapacityB
   const total = dates.map(() => 0);
 
   for (const room of grid) {
+    // A bed parked in Dorm Storage is off active duty — it must yield 0
+    // toward house capacity, not just render greyed out.
+    if (room.excludeFromCapacity) continue;
     for (const unit of room.units) {
       for (const slot of unit.slots) {
         dates.forEach((_, i) => {

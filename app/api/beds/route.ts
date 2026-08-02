@@ -3,6 +3,7 @@ import { db } from "@/db";
 import { beds, bedLocations, floors, rooms } from "@/db/schema";
 import { requireEditor } from "@/lib/auth";
 import { eq, isNull } from "drizzle-orm";
+import { isKnownBedType, listBedTypes } from "@/lib/bed-types";
 
 export const dynamic = "force-dynamic";
 
@@ -44,7 +45,10 @@ export async function POST(req: NextRequest) {
 
   const body = await req.json();
   const type = String(body.type ?? "").trim();
-  if (!type) return NextResponse.json({ error: "Bed type is required" }, { status: 400 });
+  if (!(await isKnownBedType(type))) {
+    const known = await listBedTypes();
+    return NextResponse.json({ error: `Bed type must be one of: ${known.map((t) => t.name).join(", ")}` }, { status: 400 });
+  }
 
   const [bed] = await db.insert(beds).values({ type }).returning();
   return NextResponse.json(bed, { status: 201 });

@@ -8,6 +8,8 @@ import {
   timestamp,
   uniqueIndex,
   index,
+  boolean,
+  type AnyPgColumn,
 } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
 
@@ -45,12 +47,34 @@ export const rooms = pgTable("rooms", {
     .notNull()
     .references(() => floors.id, { onDelete: "cascade" }),
   name: text("name").notNull(),
+  // True only for the system-managed "Dorm Storage" room (see
+  // src/lib/dorm-storage.ts) — a bed parked there is off active duty and
+  // must yield 0 toward house capacity. capacityByDate() in src/lib/grid.ts
+  // skips any room with this set; the /settings/layout page also hides it,
+  // since it isn't part of the user-managed physical layout.
+  excludeFromCapacity: boolean("exclude_from_capacity").notNull().default(false),
 });
+
+// The catalogue of bed types staff can add inventory of — managed from
+// /settings/layout. capacity is how many guests a bed of this type sleeps
+// (1 for a Single, 2 for a native two-person bed like a 1.5-bed/Double/
+// Queen) — see src/lib/bed-types.ts, the single place this drives grid
+// occupancy/capacity math.
+export const bedTypes = pgTable("bed_types", {
+  id: serial("id").primaryKey(),
+  name: text("name").notNull(),
+  capacity: integer("capacity").notNull().default(1),
+}, (table) => ({
+  nameIdx: uniqueIndex("bed_types_name_idx").on(table.name),
+}));
 
 // No roomId here on purpose: a bed exists independently of any room it
 // currently sits in. Its current/past rooms live in bedLocations. Beds have
 // no name/number — only a type (e.g. "Single", "Double") — the id alone
-// distinguishes them for bookings.
+// distinguishes them for bookings. `type` is a plain text column (not an FK)
+// so an existing bed's type never breaks if its bedTypes row is renamed;
+// isKnownBedType() in bed-types.ts is what actually enforces new beds only
+// ever get a currently-known type name.
 export const beds = pgTable("beds", {
   id: serial("id").primaryKey(),
   type: text("type").notNull(),
@@ -109,17 +133,30 @@ export const bedSoloPeriods = pgTable("bed_solo_periods", {
 
 // bedId is nullable with ON DELETE SET NULL: deleting a bed must never
 // delete a booking, it should just unassign it.
+// linkedBookingId is a self-reference ("Sleeps near / Linked with") — ON
+// DELETE SET NULL so deleting the linked-to booking just unlinks this one
+// rather than cascading. Deliberately one-directional (not a join table):
+// the UI only ever asks "who is THIS guest sleeping near", so a single
+// nullable FK on the booking that's doing the linking is enough — it does
+// NOT imply the reverse booking links back.
+// sharesBedWithBookingId is a SYMMETRIC pairing ("Shares Bed With" / coupled
+// allocation) — unlike linkedBookingId ("Sleeps near", one-directional hint
+// only), both bookings in a couple point at each other so either side can be
+// followed to find its partner and the joined_beds row backing the double.
 export const bookings = pgTable("bookings", {
   id: serial("id").primaryKey(),
   guestName: text("guest_name").notNull(),
   arrivalDate: date("arrival_date").notNull(),
   departureDate: date("departure_date").notNull(),
-  groupId: text("group_id"),
+  linkedBookingId: integer("linked_booking_id").references((): AnyPgColumn => bookings.id, { onDelete: "set null" }),
+  sharesBedWithBookingId: integer("shares_bed_with_booking_id").references((): AnyPgColumn => bookings.id, { onDelete: "set null" }),
   bedId: integer("bed_id").references(() => beds.id, { onDelete: "set null" }),
   dietariesTags: jsonb("dietaries_tags"),
+  guestType: text("guest_type", { enum: ["resident", "ashrami", "guest"] }).notNull().default("guest"),
 }, (table) => ({
   bedIdIdx: index("bookings_bed_id_idx").on(table.bedId),
-  groupIdIdx: index("bookings_group_id_idx").on(table.groupId),
+  linkedBookingIdIdx: index("bookings_linked_booking_id_idx").on(table.linkedBookingId),
+  sharesBedWithBookingIdIdx: index("bookings_shares_bed_with_booking_id_idx").on(table.sharesBedWithBookingId),
 }));
 
 // ---------------------------------------------------------------------------
@@ -154,6 +191,16 @@ export const joinedBedsRelations = relations(joinedBeds, ({ one }) => ({
 
 export const bookingsRelations = relations(bookings, ({ one }) => ({
   bed: one(beds, { fields: [bookings.bedId], references: [beds.id] }),
+  linkedBooking: one(bookings, {
+    fields: [bookings.linkedBookingId],
+    references: [bookings.id],
+    relationName: "linkedBooking",
+  }),
+  sharesBedWithBooking: one(bookings, {
+    fields: [bookings.sharesBedWithBookingId],
+    references: [bookings.id],
+    relationName: "sharesBedWithBooking",
+  }),
 }));
 
 // Untouched by the nuke-and-pave — events are independent of rooms/bookings.
@@ -165,10 +212,12 @@ export const events = pgTable("events", {
   notes: text("notes"),
 });
 
-// Also untouched by the nuke-and-pave. Nothing in the app reads/writes this
-// any more (the meals feature was removed along with the old booking model
-// it depended on) — declared here only so `drizzle-kit push` doesn't think
-// it's an orphaned table to drop.
+// One free-text note per calendar date, for manual overrides on the Kitchen
+// Prep Matrix (see app/kitchen) — e.g. "extra 2 covers for a walk-in guest"
+// that the computed guest/dietary counts can't know about on their own.
+// dietaryAdjustmentCount is a leftover from an earlier, removed meals
+// feature — nothing writes it any more, kept only so `drizzle-kit push`
+// doesn't treat the column as orphaned and drop it.
 export const dailyMealNotes = pgTable("daily_meal_notes", {
   id: serial("id").primaryKey(),
   date: date("date").notNull(),
@@ -183,6 +232,7 @@ export const usersRelations = relations(users, () => ({}));
 export type User = typeof users.$inferSelect;
 export type Floor = typeof floors.$inferSelect;
 export type Room = typeof rooms.$inferSelect;
+export type BedType = typeof bedTypes.$inferSelect;
 export type Bed = typeof beds.$inferSelect;
 export type BedLocation = typeof bedLocations.$inferSelect;
 export type JoinedBed = typeof joinedBeds.$inferSelect;

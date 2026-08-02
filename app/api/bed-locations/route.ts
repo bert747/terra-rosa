@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
-import { bedLocations } from "@/db/schema";
+import { bedLocations, bookings } from "@/db/schema";
 import { requireEditor } from "@/lib/auth";
-import { and, eq, gt, isNull, or } from "drizzle-orm";
+import { and, eq, gt, isNull, lt, or } from "drizzle-orm";
 
 export const dynamic = "force-dynamic";
 
@@ -36,6 +36,25 @@ export async function POST(req: NextRequest) {
   }
   if (endDate && endDate <= startDate) {
     return NextResponse.json({ error: "End date must be after start date" }, { status: 400 });
+  }
+
+  // A bed move is a structural change with no natural "in progress" state —
+  // it's only ever clean if startDate lands either on a night this bed is
+  // free, or exactly on some booking's own arrivalDate. A booking that
+  // spans THROUGH startDate (arrivalDate < startDate < departureDate) would
+  // otherwise get silently carried into the new room/layout mid-stay —
+  // split it into two bookings first so the move lands on a real boundary.
+  const [spanning] = await db
+    .select({ guestName: bookings.guestName, arrivalDate: bookings.arrivalDate, departureDate: bookings.departureDate })
+    .from(bookings)
+    .where(and(eq(bookings.bedId, bedId), lt(bookings.arrivalDate, startDate), gt(bookings.departureDate, startDate)));
+  if (spanning) {
+    return NextResponse.json(
+      {
+        error: `${spanning.guestName}'s booking (${spanning.arrivalDate} to ${spanning.departureDate}) spans through this date — split the booking first, then move the bed.`,
+      },
+      { status: 400 }
+    );
   }
 
   const conflicting = await db

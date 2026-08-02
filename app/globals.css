@@ -22,6 +22,13 @@
   --tr-warn-text: #8d4d2f;
   --tr-ok-bg: #e8efe0;
   --tr-ok-text: #4a6741;
+  /* Dashed bed-divider colour (coupled/native-double seam), read at 50%
+     opacity by .tr-grid-divider-dashed so it stays soft. Solid dividers use
+     --tr-border directly instead (see .tr-grid-divider-solid) — they need
+     more contrast than this token gives, to match the vertical column
+     lines' weight. Room dividers are a separate, darker colour still (see
+     .tr-grid-room-start) — never either of these tokens. */
+  --tr-grid-divider: #d9d4c5;
 }
 
 html,
@@ -516,6 +523,11 @@ button:hover {
   backdrop-filter: blur(2px);
 }
 
+/* A worklist, not a warning — an unassigned booking isn't a problem as long
+   as there's spare inventory somewhere (see checkHouseCapacity, which is
+   what actually prevents overbooking now); this panel is just "here's what
+   still needs a bed picked", so it stays in the app's normal flat/muted
+   palette rather than an alarm red. */
 .tr-grid-alerts-corner {
   position: fixed;
   right: 16px;
@@ -524,10 +536,10 @@ button:hover {
   max-height: 42vh;
   overflow: auto;
   z-index: 34;
-  border: 1px solid #d4a6a7;
+  border: 1px solid var(--tr-border-strong);
   border-radius: 10px;
-  background: rgba(251, 236, 236, 0.97);
-  color: #6b2f2f;
+  background: var(--tr-surface-strong);
+  color: var(--tr-text);
   box-shadow: 0 10px 24px rgba(0, 0, 0, 0.14);
   padding: 10px 12px;
 }
@@ -587,6 +599,13 @@ button:hover {
   height: 32px;
   min-height: 32px;
   vertical-align: middle;
+  /* Every horizontal seam is owned by the cell above it (border-bottom on
+     .tr-grid-divider-solid / -dashed, or explicitly re-enabled by
+     .tr-grid-room-start below). With border-collapse: separate, the global
+     `th, td { border: 1px solid ... }` reset would otherwise still paint an
+     untouched top border on the cell below, doubling every seam as a faint
+     second line next to the real one. */
+  border-top: none;
 }
 
 .tr-grid th {
@@ -646,9 +665,24 @@ button:hover {
   text-overflow: ellipsis;
   cursor: pointer;
   /* Free beds show their room's tint, so you can read where one room ends and
-     the next begins straight down any column. Occupied/unavailable states
-     below override it — what's IN the bed matters more than which room it is. */
+     the next begins straight down any column. Joined/merged/booked states
+     never set their own background-COLOR (only .tr-grid-inactive sets its
+     own background-IMAGE, layered below — see there), so this always shows
+     through as the base tone underneath whatever else the cell draws. */
   background-color: var(--tr-room-tint, transparent);
+  /* Weekend shading: GridCanvas.tsx sets --tr-weekend-image/--tr-weekend-pos
+     per cell (see weekendOverlayVars), anchored to that cell's own real
+     start date rather than a per-cell "is this a weekend" class. That's what
+     lets a single colSpan'd booking pill stay one continuous element across
+     a weekday/weekend boundary while still shading the right days inside it
+     — the gradient tiles every 448px (COLUMN_WIDTH * 7) and the position
+     offset rotates the correct day under each cell's left edge. Listed first
+     so it paints on top of everything else in this rule and can never be
+     hidden by another state's colour/pattern. */
+  background-image: var(--tr-weekend-image, none);
+  background-position: var(--tr-weekend-pos, 0 0);
+  background-size: 448px 100%;
+  background-repeat: repeat-x;
 }
 
 .tr-grid-cell a {
@@ -685,17 +719,140 @@ button:hover {
   outline-offset: -2px;
 }
 
-.tr-grid-occupied {
-  background-color: #e7efe1;
+/* A booking renders as one continuous pill spanning check-in to check-out
+   (built with colSpan across the visible date cells — see renderBookingPill
+   in GridCanvas.tsx), not as a coloured cell per night. The <td> itself
+   stays a plain grid cell; the <a> inside it is the actual pill. */
+.tr-grid-booking-cell {
+  padding: 3px 3px !important;
+  /* A short (e.g. 1-night) booking's pill is often too narrow to fit the
+     guest's full name — rather than truncate it to "R..", the name is
+     allowed to spill out past the pill's own box into the neighbouring
+     (usually empty) cell space instead (see .tr-grid-pill-name /
+     .tr-grid-booking-pill below). That only works if THIS cell doesn't
+     clip it at its own boundary first — .tr-grid-cell's overflow: hidden
+     (needed elsewhere, e.g. so long room names don't spill) is overridden
+     here for booking cells specifically. */
+  overflow: visible;
 }
 
-.tr-grid-arrival {
-  background-color: #f4e5d4;
-  border-left: 2px solid var(--tr-accent);
+.tr-grid-booking-pill {
+  /* Absolutely positioned within the parent <td> (.tr-grid-cell is already
+     `position: relative`) so its left/right can be inset by half a column
+     on a true arrival/departure edge — see renderBookingPill's leftInset/
+     rightInset in GridCanvas.tsx. The containing block for an absolutely
+     positioned element is the ancestor's PADDING edge, so left/right: 0
+     already lands flush inside the td's own 3px padding — no extra offset
+     needed to match the old flow-layout look on a non-edge (continuing) side. */
+  position: absolute;
+  /* Above the grid's own column-border lines and any neighbouring cell's
+     background/text, so an overflowing guest name (see .tr-grid-pill-name)
+     reads on top of the day boundary it spills across instead of being
+     interrupted by it. */
+  z-index: 2;
+  top: 3px;
+  bottom: 3px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  padding: 0 10px;
+  /* Deliberately NOT hidden — see .tr-grid-pill-name. */
+  overflow: visible;
+  /* Deliberately flat — NO weekend gradient overlay on a booking pill. That
+     gradient's background-position is anchored to whichever element it's
+     painted on, assuming that element's own box starts exactly at its
+     date's real calendar boundary. Once the pill is inset (arrival's own
+     half-cell start) or a separate bled tail (departure's half-cell), each
+     piece's box starts at a different offset from the real day boundary,
+     so the SAME inherited position value lands wrong on each piece — a
+     booking must always read as one single flat colour across its whole
+     span regardless, so the weekend tint is simply left off bookings
+     entirely rather than chasing per-fragment position math. */
+  background-color: #d3ecd6;
+  border: 1px solid #9cc9a1;
+  border-radius: 12px;
+  color: var(--tr-text);
+  text-decoration: none;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
 }
 
-.tr-grid-departure {
-  border-right: 2px solid var(--tr-accent);
+.tr-grid-booking-pill:hover {
+  filter: brightness(0.97);
+}
+
+/* Flat, border-less edge that bleeds -3px into the NEXT/PREVIOUS cell's own
+   padding, rather than stopping short inside its own <td> — used both where
+   a stay is cut off by the edge of the loaded/virtualized window (not a
+   real check-in/out) AND, for -end, on every booking's own true departure
+   edge (see pillClasses in renderBookingPill: -end is now unconditional,
+   since the departure date's half-cell "ending cell" treatment happens on
+   a SEPARATE element — the departing tail below — in the NEXT <td>, not
+   here). Left/right are set inline per pill/tail; these override with
+   `!important` to reach across the gap instead of stopping at whatever
+   inline inset that side would otherwise get. Without this bleed, a real
+   checkout's pill (stopping flush at its own td boundary) and its tail
+   (starting flush at the NEXT td's boundary) sit with the two tds' borders
+   and padding between them — a visible gap that reads as the tail being a
+   detached, floating fragment instead of one continuous shape. */
+.tr-pill-continues-start {
+  border-left: none;
+  border-top-left-radius: 2px;
+  border-bottom-left-radius: 2px;
+  left: -3px !important;
+  padding-left: 7px;
+}
+
+.tr-pill-continues-end {
+  border-right: none;
+  border-top-right-radius: 2px;
+  border-bottom-right-radius: 2px;
+  right: -3px !important;
+  padding-right: 7px;
+}
+
+/* A checkout's half-width "tail", rendered in the DEPARTURE DATE's own cell
+   (a booking's run never includes that date — see packBookingsIntoSlots'
+   departingBooking annotation in grid.ts). Carries the .tr-grid-booking-pill
+   class alongside this one specifically so it shares that EXACT same
+   background/border/text colour as the rest of the booking's own pill —
+   a booking must read as one uniform colour across its whole span, arrival
+   half-cell through departure half-cell, with no separate muted/grey
+   "tail" identity. This rule only overrides the position-specific bits:
+   the true rounded "ending cell" edge on its right (at 50% width into this
+   cell, matching the arrival side's own inset in renderBookingPill), and a
+   bleed-left (like .tr-pill-continues-start) to fuse with that booking's
+   own pill stopping flush in the PREVIOUS cell, so the two read as one
+   continuous shape rather than a detached box. */
+.tr-grid-departing-tail {
+  padding: 0 8px 0 10px;
+  border-left: none;
+  border-radius: 0 12px 12px 0;
+  /* Lower than .tr-grid-booking-pill's own z-index: 2 — a tail carries no
+     text (see renderDepartingTail), just a decorative colour patch, while
+     the PREVIOUS cell's real pill may have a guest name overflowing past
+     its own narrow box into this exact space (see .tr-grid-pill-name).
+     Without this, the tail — sitting in a later <td> — wins the paint
+     order tie at equal z-index and its opaque background silently covers
+     part of that overflowing name (e.g. "Rob" rendering as "Rol"). A real
+     pill's name must always win that fight. */
+  z-index: 1;
+}
+
+.tr-grid-pill-name {
+  /* Deliberately NOT clipped/ellipsized — a short booking's pill is often
+     narrower than its guest's name; letting it spill past the pill's own
+     box (see .tr-grid-booking-pill/.tr-grid-booking-cell above) reads the
+     name in full rather than truncating to a useless "R..". */
+  white-space: nowrap;
+}
+
+.tr-grid-pill-chevron {
+  color: var(--tr-text-muted);
+  flex: none;
+  font-size: 10px;
 }
 
 /* Bookings that don't count toward capacity (residents, guardians, workers). */
@@ -728,16 +885,6 @@ button:hover {
   );
 }
 
-.tr-grid-weekend.tr-grid-moved-away {
-  background-image: repeating-linear-gradient(
-    45deg,
-    #f3e2d6,
-    #f3e2d6 4px,
-    #e8c9ae 4px,
-    #e8c9ae 8px
-  );
-}
-
 /* Someone is in a bed the room doesn't have that night. */
 .tr-grid-conflict {
   background-color: var(--tr-warn-bg);
@@ -751,45 +898,34 @@ button:hover {
   font-weight: 600;
 }
 
-/* Weekend shading is a background-IMAGE overlay rather than a colour so it
-   composites over the per-room tint instead of replacing it. */
-.tr-grid-weekend {
-  background-image: linear-gradient(rgba(0, 0, 0, 0.055), rgba(0, 0, 0, 0.055));
-}
-
-.tr-grid-weekend.tr-grid-occupied,
-.tr-grid-weekend.tr-grid-conflict {
-  background-image: none;
-}
-
-/* Unavailable/moved beds are drawn entirely via background-image (the
-   diagonal stripes), so the weekend overlay above must not blank it out -
-   that would hide the striped pattern on weekend columns. Repeat it here so
-   the stripes stay visible through the weekend column. */
-.tr-grid-weekend.tr-grid-unavailable {
-  background-image: repeating-linear-gradient(
-    45deg,
-    #eeeeea,
-    #eeeeea 4px,
-    #e4e4df 4px,
-    #e4e4df 8px
-  );
-}
-
+/* The header row has exactly one date per <th> (no colSpan), so it doesn't
+   need the tiled-gradient treatment .tr-grid-cell uses below — a flat colour
+   keyed off the same weekend check is simplest. */
 .tr-grid th.tr-grid-weekend {
   background-color: #efece7;
 }
 
 /* A bed not placed in this room on this date — sprouted in later or already
-   collapsed away. Not bookable. */
+   collapsed away. Not bookable. Layers its own stripe pattern UNDER the
+   weekend wallpaper from .tr-grid-cell (var(--tr-weekend-image), listed
+   first here too) rather than just setting background-image on its own —
+   a single-layer override here would silently blank out weekend shading on
+   unplaced cells, which is exactly the "joined/placement state overrides
+   the weekend colour" bug this avoids. 448px matches WEEK_CYCLE_WIDTH in
+   GridCanvas.tsx (COLUMN_WIDTH * 7). */
 .tr-grid-inactive {
-  background-image: repeating-linear-gradient(
-    45deg,
-    #f0f0ec,
-    #f0f0ec 4px,
-    #e6e6e0 4px,
-    #e6e6e0 8px
-  );
+  background-image:
+    var(--tr-weekend-image, none),
+    repeating-linear-gradient(
+      45deg,
+      #f0f0ec,
+      #f0f0ec 4px,
+      #e6e6e0 4px,
+      #e6e6e0 8px
+    );
+  background-position: var(--tr-weekend-pos, 0 0), 0 0;
+  background-size: 448px 100%, auto;
+  background-repeat: repeat-x, repeat;
 }
 
 /* Divider line between a 2-row bed block's top and bottom cell, applied to
@@ -800,24 +936,171 @@ button:hover {
    clipping the icon did, and it reads as one continuous visual language
    across both the joined-singles and native-bed cases. */
 .tr-grid-divider-solid {
-  border-bottom: 2px solid #b9b9b2;
+  border-bottom: 2px solid var(--tr-border);
 }
 
+/* Dashed dividers are painted as a flat-colour background band, not
+   border-image. border-image's gradient source gets rasterized/resampled by
+   the browser to fit the border box, and that resampling step is not
+   guaranteed pixel-identical to a plain border-bottom fill across engines
+   and device-pixel ratios — exactly the kind of drift that showed up here.
+   A background-image with hard (non-interpolated) colour stops has no such
+   step: the pixels inside a dash are a flat fill of --tr-grid-divider, the
+   very same custom property .tr-grid-divider-solid uses, so the two cannot
+   render as different colours. (The historical "background bleeds into a
+   second line" bug this used to have was a different issue — an unrelated
+   duplicate border from border-collapse: separate — fixed above by giving
+   border-top: none to every grid cell; it doesn't apply to this rule.) */
 .tr-grid-divider-dashed {
-  border-bottom: 2px dashed var(--tr-accent);
+  border-bottom: none;
+  /* Half the opacity of the solid divider colour — a coupled/native-double
+     seam should read as a soft hint, not a heavy stroke like the room
+     divider above it. Layered alongside var(--tr-weekend-image) (listed
+     first, same as .tr-grid-inactive above) rather than set alone — a
+     single-layer background-image here was silently blanking out weekend
+     shading on exactly the top row of every Couple Double / native
+     two-person bed (the one row that always gets this class), which is
+     the same "later rule overrides the earlier background-image instead
+     of layering with it" bug .tr-grid-inactive was already fixed for. */
+  background-image:
+    var(--tr-weekend-image, none),
+    repeating-linear-gradient(to right, color-mix(in srgb, var(--tr-grid-divider) 50%, transparent) 0, color-mix(in srgb, var(--tr-grid-divider) 50%, transparent) 12px, transparent 12px, transparent 18px);
+  background-repeat: repeat-x, repeat-x;
+  background-position: var(--tr-weekend-pos, 0 0), bottom left;
+  background-size: 448px 100%, 100% 2px;
 }
 
 /* A "Solo Double" cell spanning both of a joined pair's rows for one date —
-   sold as a single spot, so it gets its own tint to read as one unit rather
-   than two stacked bookable beds. */
+   sold as a single spot, so it reads as one unit rather than two stacked
+   bookable beds. It still takes the room's own tint (the same variable
+   .tr-grid-cell reads) rather than a fixed colour, otherwise it paints a
+   flat box that clashes with whichever room happens to be showing. */
 .tr-grid-solo-merged {
-  background-color: #f4efe2;
+  background-color: var(--tr-room-tint, #f4efe2);
 }
 
-/* First bed row of each room: a heavier rule so room blocks are separable
-   even where two adjacent rooms happen to share a tint. */
+/* A booking pill inside a solo-merged cell (see .tr-grid-solo-merged above)
+   sits in a td whose rowSpan:2 doubles its height to cover both of the
+   joined pair's rows — .tr-grid-booking-pill's own top:3px/bottom:3px would
+   otherwise stretch to fill that full doubled height, rendering as a
+   visually "double-tall" pill instead of the same single-row size every
+   other booking pill uses. Pin it to one row's height and centre it in the
+   merged cell instead. */
+.tr-grid-solo-merged.tr-grid-booking-pill,
+.tr-grid-solo-merged > .tr-grid-booking-pill {
+  top: 50%;
+  bottom: auto;
+  height: calc(50% - 6px);
+  transform: translateY(-50%);
+}
+
+/* First bed row of each room: a heavier, darker rule than the internal
+   bed dividers (.tr-grid-divider-solid / -dashed above) so room blocks
+   stay separable even where two adjacent rooms happen to land on similar
+   tints in the palette. */
 .tr-grid-room-start > td {
-  border-top: 2px solid #b9b9b2;
+  border-top: 2px solid #475569;
+}
+
+/* Dorm Storage rows (see rooms.excludeFromCapacity) — a bed parked here is
+   off active duty, so it reads as visibly "greyed out" rather than just
+   another room colour: muted text on top of the fixed grey tint GridCanvas.tsx
+   sets via DORM_STORAGE_ROOM_STYLE. Deliberately a plain `color`, not
+   `opacity`/`filter` on the row — this row's Room/Bed label cells are
+   `position: sticky`, and opacity on an ancestor of a sticky element forces
+   an isolated compositing layer that visibly seams at the sticky element's
+   edges while scrolling, and would also flatten the weekend-shading
+   background-image and this tint into one pre-dimmed layer instead of
+   letting them stay independently composited background layers the way
+   every other row's cells already work. */
+.tr-grid-room-storage {
+  color: #8a8578;
+}
+
+/* Edge-grab (resize) preview for a booking pill — see createResizeGhost /
+   updateResizeGhost in GridCanvas.tsx. A plain DOM node appended straight to
+   <body> (not part of React's tree — nothing here needs a re-render), so
+   `position: fixed` + a viewport-relative rect from getBoundingClientRect
+   is all it needs to track the drag; top/height are set once at creation,
+   left/width are rewritten on every snapped move. The LIVE pill/cell is
+   never touched — this is purely an overlay indicating where the edge
+   would land if released now. */
+.tr-pill-resize-ghost {
+  position: fixed;
+  z-index: 1050;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(91, 113, 71, 0.22);
+  border: 2px dashed var(--tr-accent);
+  border-radius: 12px;
+  pointer-events: none;
+}
+
+/* Extending an edge into a date this bed is already occupied on (see the
+   collision check in onPillPointerMove) — same red as
+   .tr-pill-move-ghost-invalid, since it's the same "can't drop here"
+   meaning. */
+.tr-pill-resize-ghost-invalid {
+  background: rgba(179, 49, 45, 0.22);
+  border-color: #b3312d;
+}
+
+.tr-pill-resize-ghost-label {
+  background: var(--tr-accent);
+  color: var(--tr-accent-contrast, #fff);
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+
+/* Center-grab (vertical move) preview for a booking pill — see
+   createMoveGhost / updateMoveGhost in GridCanvas.tsx. Same fixed-position,
+   body-appended approach as the resize ghost above, sized to match the
+   dragged pill exactly (width/height copied from its origin rect) rather
+   than outlining the whole row it's hovering. Colour is set by toggling
+   -valid/-swap/-invalid, driven by the live occupancy-index collision
+   check, not by hover alone. */
+.tr-pill-move-ghost {
+  position: fixed;
+  z-index: 1050;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 12px;
+  border: 2px solid;
+  pointer-events: none;
+  transition: top 60ms ease-out;
+}
+
+.tr-pill-move-ghost-valid {
+  background: rgba(91, 113, 71, 0.28);
+  border-color: var(--tr-accent);
+}
+
+.tr-pill-move-ghost-swap {
+  background: rgba(184, 134, 11, 0.28);
+  border-color: #b8860b;
+}
+
+.tr-pill-move-ghost-invalid {
+  background: rgba(179, 49, 45, 0.22);
+  border-color: #b3312d;
+}
+
+.tr-pill-move-ghost-label {
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 4px;
+  white-space: nowrap;
+  max-width: 90%;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .tr-grid-summary td {
@@ -856,28 +1139,6 @@ button:hover {
 }
 
 .tr-grid-cell:has(> .tr-grid-new):hover {
-  outline: 2px solid var(--tr-accent);
-  outline-offset: -2px;
-  cursor: pointer;
-}
-
-/* Unlike the bare "+", an empty Solo Double spot is a real label, not a
-   subtle affordance — it stays visible by default rather than only on
-   hover. */
-.tr-grid-cell a.tr-grid-solo-new {
-  display: block;
-  min-height: 15px;
-  color: var(--tr-muted-text, #8a8578);
-  text-align: center;
-  font-size: 10px;
-  font-weight: 600;
-}
-
-.tr-grid-cell:hover > a.tr-grid-solo-new {
-  color: var(--tr-accent);
-}
-
-.tr-grid-cell:has(> .tr-grid-solo-new):hover {
   outline: 2px solid var(--tr-accent);
   outline-offset: -2px;
   cursor: pointer;
@@ -1031,6 +1292,78 @@ button:hover {
 
 .tr-context-menu-item-danger {
   color: #b3312d;
+}
+
+/* -------------------------------------------------------------------------
+   Bed action modal (Move Bed / Send to Dorm Storage).
+   ------------------------------------------------------------------------- */
+
+.tr-modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1100;
+  background: rgba(47, 59, 46, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+
+.tr-modal {
+  width: 100%;
+  max-width: 360px;
+  background: var(--tr-surface, #fff);
+  border: 1px solid #cfc9ba;
+  border-radius: 8px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.28);
+  padding: 18px;
+}
+
+.tr-combobox {
+  position: relative;
+}
+
+.tr-combobox-clear {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  min-height: unset;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  line-height: 1;
+  border-radius: 50%;
+  color: var(--tr-text-muted);
+}
+
+.tr-combobox-list {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  max-height: 220px;
+  overflow-y: auto;
+  background: var(--tr-surface-strong);
+  border: 1px solid var(--tr-border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16);
+}
+
+.tr-combobox-option {
+  padding: 8px 12px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.tr-combobox-option:hover {
+  background: var(--tr-accent-soft);
+}
+
+.tr-combobox-empty {
+  padding: 8px 12px;
+  font-size: 13px;
 }
 
 @media (max-width: 900px) {

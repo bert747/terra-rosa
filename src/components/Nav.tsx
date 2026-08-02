@@ -7,6 +7,8 @@ const LINKS: NavLink[] = [
   { href: "/grid", label: "Grid" },
   { href: "/bookings", label: "Bookings" },
   { href: "/events", label: "Events" },
+  { href: "/kitchen", label: "Kitchen" },
+  { href: "/housekeeping", label: "Housekeeping" },
 ];
 
 // Editor-only sections, appended to LINKS for editors.

@@ -2,6 +2,18 @@
 
 import { useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
+import { formatDateUk } from "@/lib/dates";
+import { addDays } from "@/lib/occupancy";
+import DateField from "@/components/DateField";
+
+function todayIso(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function defaultForm() {
+  const start = todayIso();
+  return { name: "", startDate: start, endDate: addDays(start, 7), notes: "" };
+}
 
 interface EventRow {
   id: number;
@@ -15,7 +27,7 @@ export default function EventsPage() {
   const searchParams = useSearchParams();
   const [events, setEvents] = useState<EventRow[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [form, setForm] = useState({ name: "", startDate: "", endDate: "", notes: "" });
+  const [form, setForm] = useState(defaultForm);
   const [editingId, setEditingId] = useState<number | null>(null);
 
   async function load() {
@@ -57,7 +69,7 @@ export default function EventsPage() {
       setError((await res.json()).error ?? `Could not ${editingId ? "update" : "add"} event.`);
       return;
     }
-    setForm({ name: "", startDate: "", endDate: "", notes: "" });
+    setForm(defaultForm());
     setEditingId(null);
     load();
   }
@@ -72,7 +84,7 @@ export default function EventsPage() {
     }
     if (editingId === eventId) {
       setEditingId(null);
-      setForm({ name: "", startDate: "", endDate: "", notes: "" });
+      setForm(defaultForm());
     }
     load();
   }
@@ -89,7 +101,7 @@ export default function EventsPage() {
 
   function cancelEdit() {
     setEditingId(null);
-    setForm({ name: "", startDate: "", endDate: "", notes: "" });
+    setForm(defaultForm());
   }
 
   return (
@@ -116,8 +128,8 @@ export default function EventsPage() {
             {events.map((ev) => (
               <tr key={ev.id}>
                 <td>{ev.name}</td>
-                <td>{ev.startDate}</td>
-                <td>{ev.endDate}</td>
+                <td>{formatDateUk(ev.startDate)}</td>
+                <td>{formatDateUk(ev.endDate)}</td>
                 <td className="tr-muted tr-cell-clip" title={ev.notes ?? ""}>{ev.notes ?? ""}</td>
                 <td className="tr-col-actions">
                   <button type="button" onClick={() => beginEdit(ev)}>
@@ -143,11 +155,11 @@ export default function EventsPage() {
           </div>
           <div>
             <label style={{ display: "block", fontSize: 12 }}>Start</label>
-            <input type="date" required value={form.startDate} onChange={(e) => setForm({ ...form, startDate: e.target.value })} />
+            <DateField required value={form.startDate} onChange={(iso) => setForm({ ...form, startDate: iso })} />
           </div>
           <div>
             <label style={{ display: "block", fontSize: 12 }}>End</label>
-            <input type="date" required value={form.endDate} onChange={(e) => setForm({ ...form, endDate: e.target.value })} />
+            <DateField required value={form.endDate} onChange={(iso) => setForm({ ...form, endDate: iso })} />
           </div>
           <div style={{ minWidth: 260, flex: "1 1 260px" }}>
             <label style={{ display: "block", fontSize: 12 }}>Notes</label>

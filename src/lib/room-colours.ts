@@ -25,14 +25,16 @@ export interface RoomColour {
 }
 
 const PALETTE: RoomColour[] = [
-  { tint: "#f4f8fc", label: "#dce8f4" }, // blue
-  { tint: "#f7f4fb", label: "#e6ddf2" }, // violet
-  { tint: "#f3f9f4", label: "#dcefe0" }, // green
-  { tint: "#fdf7f0", label: "#f8e7d2" }, // amber
-  { tint: "#fcf3f5", label: "#f4dbe0" }, // rose
-  { tint: "#f2f9fa", label: "#d9edf0" }, // teal
-  { tint: "#f9f8ef", label: "#eeecd6" }, // olive
-  { tint: "#f5f5f8", label: "#e3e3ea" }, // slate
+  { tint: "#f7f5f3", label: "#e7e2dc" }, // warm stone
+  { tint: "#f8f4f0", label: "#ecdfd2" }, // pale taupe
+  { tint: "#f9f6ec", label: "#efe6cc" }, // soft ecru
+  { tint: "#f1f4f7", label: "#dde6ee" }, // muted slate
+  { tint: "#f5f3ef", label: "#e4ddd0" }, // subtle greige
+  { tint: "#f2f6ef", label: "#dde8d2" }, // dusty sage
+  { tint: "#f9f1ee", label: "#edd9d0" }, // soft clay
+  { tint: "#f9f5ee", label: "#ede0c8" }, // warm sand
+  { tint: "#f1f5ee", label: "#dde6d3" }, // faded moss
+  { tint: "#f6f4f1", label: "#e6dfd6" }, // pale mushroom
 ];
 
 /** The colour pair for the room at `index` in the displayed room order. */

@@ -1,6 +1,7 @@
 import { db } from "@/db";
 import { beds, bedLocations, bedSoloPeriods, bookings, floors, joinedBeds, rooms } from "@/db/schema";
 import { and, eq, gt, isNull, lt, or } from "drizzle-orm";
+import { DORM_STORAGE_FLOOR_NAME, DORM_STORAGE_ROOM_NAME } from "@/lib/dorm-storage";
 import {
   buildRoomGrid,
   capacityByDate,
@@ -13,6 +14,14 @@ import {
 } from "@/lib/grid";
 import { eventsInRange, layoutEventLanes, type EventBand } from "@/lib/event-lanes";
 import { addDays, type ISODate } from "@/lib/occupancy";
+import { loadBedCapacities } from "@/lib/bed-types";
+
+export interface UnassignedAlert {
+  id: number;
+  guestName: string;
+  arrivalDate: ISODate;
+  departureDate: ISODate;
+}
 
 export interface GridData {
   start: ISODate;
@@ -24,7 +33,32 @@ export interface GridData {
   depByDate: number[];
   occupiedByDate: number[];
   totalByDate: number[];
-  alerts: string[];
+  alerts: UnassignedAlert[];
+  /** Target room id for the grid's "Send to Dorm Storage" bed action. */
+  dormStorageRoomId: number;
+}
+
+/**
+ * Get-or-create the id of the system "Dorm Storage" room, so a bed can
+ * always be sent there even before anyone has moved one in. Floors/rooms are
+ * otherwise entirely user-managed (see /settings/layout — no seed data), but
+ * this one room is infrastructure the grid's "Send to Dorm Storage" action
+ * depends on existing, so it's created lazily here instead of requiring a
+ * manual setup step.
+ */
+async function ensureDormStorageRoomId(): Promise<number> {
+  const [existingRoom] = await db.select({ id: rooms.id }).from(rooms).where(eq(rooms.excludeFromCapacity, true));
+  if (existingRoom) return existingRoom.id;
+
+  let [floor] = await db.select({ id: floors.id }).from(floors).where(eq(floors.name, DORM_STORAGE_FLOOR_NAME));
+  if (!floor) {
+    [floor] = await db.insert(floors).values({ name: DORM_STORAGE_FLOOR_NAME }).returning({ id: floors.id });
+  }
+  const [room] = await db
+    .insert(rooms)
+    .values({ floorId: floor.id, name: DORM_STORAGE_ROOM_NAME, excludeFromCapacity: true })
+    .returning({ id: rooms.id });
+  return room.id;
 }
 
 /**
@@ -37,7 +71,8 @@ export async function loadGridData(start: ISODate, days: number): Promise<GridDa
   const lastDate = dates[dates.length - 1];
   const windowEnd = addDays(start, days); // exclusive
 
-  const [floorRows, roomRows, allBeds, locationRows, joinRows, soloRows, eventList] = await Promise.all([
+  const [dormStorageRoomId, floorRows, roomRows, allBeds, locationRows, joinRows, soloRows, eventList, capacities] = await Promise.all([
+    ensureDormStorageRoomId(),
     db.select().from(floors),
     db.select().from(rooms),
     db.select({ id: beds.id, type: beds.type }).from(beds),
@@ -69,12 +104,24 @@ export async function loadGridData(start: ISODate, days: number): Promise<GridDa
       .from(bedSoloPeriods)
       .where(and(lt(bedSoloPeriods.startDate, windowEnd), or(isNull(bedSoloPeriods.endDate), gt(bedSoloPeriods.endDate, start)))),
     eventsInRange(start, lastDate),
+    loadBedCapacities(),
   ]);
 
   const floorNameById = new Map(floorRows.map((f) => [f.id, f.name]));
   const roomsForGrid = roomRows
-    .map((r) => ({ id: r.id, name: r.name, floorId: r.floorId, floorName: floorNameById.get(r.floorId) ?? "" }))
-    .sort((a, b) => a.floorName.localeCompare(b.floorName) || a.name.localeCompare(b.name, undefined, { numeric: true }));
+    .map((r) => ({
+      id: r.id,
+      name: r.name,
+      floorId: r.floorId,
+      floorName: floorNameById.get(r.floorId) ?? "",
+      excludeFromCapacity: r.excludeFromCapacity,
+    }))
+    .sort((a, b) => {
+      // Dorm Storage (and anything else ever flagged excludeFromCapacity)
+      // always sorts after every normal room, regardless of floor/name.
+      if (a.excludeFromCapacity !== b.excludeFromCapacity) return a.excludeFromCapacity ? 1 : -1;
+      return a.floorName.localeCompare(b.floorName) || a.name.localeCompare(b.name, undefined, { numeric: true });
+    });
 
   const gridBedInfos: GridBedInfo[] = allBeds.map((b) => ({ bedId: b.id, type: b.type }));
   const gridLocationSegments: BedLocationSegment[] = locationRows;
@@ -87,7 +134,6 @@ export async function loadGridData(start: ISODate, days: number): Promise<GridDa
       guestName: bookings.guestName,
       arrivalDate: bookings.arrivalDate,
       departureDate: bookings.departureDate,
-      groupId: bookings.groupId,
       bedId: bookings.bedId,
     })
     .from(bookings)
@@ -97,14 +143,14 @@ export async function loadGridData(start: ISODate, days: number): Promise<GridDa
     .filter((b): b is typeof b & { bedId: number } => b.bedId != null)
     .map((b) => ({ ...b }));
 
-  const grid = buildRoomGrid(dates, roomsForGrid, gridBedInfos, gridLocationSegments, gridJoinSegments, gridSoloSegments, gridBookings);
+  const grid = buildRoomGrid(dates, roomsForGrid, gridBedInfos, gridLocationSegments, gridJoinSegments, gridSoloSegments, gridBookings, capacities);
   const { occupied: occupiedByDate, total: totalByDate } = capacityByDate(dates, grid);
   const eventLanes = layoutEventLanes(dates, eventList);
 
   const arrByDate = dates.map((d) => bookingRows.filter((b) => b.arrivalDate === d).length);
   const depByDate = dates.map((d) => bookingRows.filter((b) => b.departureDate === d).length);
 
-  const alerts: string[] = [];
+  const alerts: UnassignedAlert[] = [];
   const unassigned = await db
     .select({ id: bookings.id, guestName: bookings.guestName, arrivalDate: bookings.arrivalDate, departureDate: bookings.departureDate })
     .from(bookings)
@@ -112,9 +158,9 @@ export async function loadGridData(start: ISODate, days: number): Promise<GridDa
   for (const b of unassigned) {
     const overlaps = b.arrivalDate < windowEnd && b.departureDate > start;
     if (overlaps) {
-      alerts.push(`No bed assigned: ${b.guestName} (${b.arrivalDate} to ${b.departureDate})`);
+      alerts.push(b);
     }
   }
 
-  return { start, days, dates, grid, eventLanes, arrByDate, depByDate, occupiedByDate, totalByDate, alerts };
+  return { start, days, dates, grid, eventLanes, arrByDate, depByDate, occupiedByDate, totalByDate, alerts, dormStorageRoomId };
 }

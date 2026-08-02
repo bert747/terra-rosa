@@ -2,14 +2,24 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { nightsBetween } from "@/lib/dates";
+import { isIsoDate, nightsBetween } from "@/lib/dates";
 import DietaryTagInput from "@/components/DietaryTagInput";
+import DateField from "@/components/DateField";
+import LinkedBookingSelect from "@/components/LinkedBookingSelect";
+import ShareBedSelect from "@/components/ShareBedSelect";
 import { STANDARD_DIETARY_TAGS } from "@/lib/dietary-tags";
 
 interface BedOption {
   id: number;
   type: string;
-  room: { roomId: number; roomName: string; floorId: number; floorName: string } | null;
+  room: { roomId: number; roomName: string; floorId: number; floorName: string };
+}
+
+interface FallbackPair {
+  bedId: number;
+  partnerBedId: number;
+  roomId: number;
+  roomName: string;
 }
 
 interface Booking {
@@ -17,9 +27,29 @@ interface Booking {
   guestName: string;
   arrivalDate: string;
   departureDate: string;
-  groupId: string | null;
+  linkedBookingId: number | null;
+  sharesBedWithBookingId: number | null;
   bedId: number | null;
   dietariesTags: string[] | null;
+  guestType: string;
+}
+
+const GUEST_TYPES: { value: string; label: string }[] = [
+  { value: "guest", label: "Guest" },
+  { value: "resident", label: "Resident" },
+  { value: "ashrami", label: "Ashrami" },
+];
+
+interface Draft {
+  guestName: string;
+  arrivalDate: string;
+  departureDate: string;
+  linkedBookingId: number | null;
+  sharesBedWithBookingId: number | null;
+  bedTypeFilter: "single" | "double";
+  bedId: string;
+  partnerBedId: string;
+  guestType: string;
 }
 
 export default function BookingDetailPage() {
@@ -29,32 +59,39 @@ export default function BookingDetailPage() {
 
   const [booking, setBooking] = useState<Booking | null>(null);
   const [bedOptions, setBedOptions] = useState<BedOption[]>([]);
-  const [draft, setDraft] = useState<{
-    guestName: string;
-    arrivalDate: string;
-    departureDate: string;
-    groupId: string;
-    bedId: string;
-  } | null>(null);
+  const [fallbackPairs, setFallbackPairs] = useState<FallbackPair[]>([]);
+  const [draft, setDraft] = useState<Draft | null>(null);
   const [dietaryTags, setDietaryTags] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   async function load() {
-    const [b, beds] = await Promise.all([
-      fetch(`/api/bookings/${id}`).then((res) => res.json()),
-      fetch("/api/beds").then((res) => res.json()),
-    ]);
+    const b: Booking = await fetch(`/api/bookings/${id}`).then((res) => res.json());
     setBooking(b);
-    setBedOptions(beds);
+    setDietaryTags(Array.isArray(b.dietariesTags) ? b.dietariesTags : []);
+
+    // Figure out which Bed Type filter actually shows this booking's own
+    // bed, so re-opening an existing Double booking doesn't silently drop
+    // its bed out of the visible options.
+    let bedTypeFilter: "single" | "double" = "single";
+    if (b.bedId) {
+      const p = new URLSearchParams({ arrival: b.arrivalDate, departure: b.departureDate, excludeBookingId: id, bedType: "single" });
+      const singleData = await fetch(`/api/beds/available?${p}`).then((r) => r.json());
+      const inSingle = (singleData.rows as BedOption[] | undefined)?.some((row) => row.id === b.bedId);
+      if (!inSingle) bedTypeFilter = "double";
+    }
+
     setDraft({
       guestName: b.guestName,
       arrivalDate: b.arrivalDate,
       departureDate: b.departureDate,
-      groupId: b.groupId ?? "",
+      linkedBookingId: b.linkedBookingId,
+      sharesBedWithBookingId: b.sharesBedWithBookingId,
+      bedTypeFilter,
       bedId: b.bedId ? String(b.bedId) : "",
+      partnerBedId: "",
+      guestType: b.guestType ?? "guest",
     });
-    setDietaryTags(Array.isArray(b.dietariesTags) ? b.dietariesTags : []);
   }
 
   useEffect(() => {
@@ -62,14 +99,46 @@ export default function BookingDetailPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
+  useEffect(() => {
+    if (!draft) return;
+    if (!isIsoDate(draft.arrivalDate) || !isIsoDate(draft.departureDate) || draft.departureDate <= draft.arrivalDate) {
+      setBedOptions([]);
+      setFallbackPairs([]);
+      return;
+    }
+    const params = new URLSearchParams({
+      arrival: draft.arrivalDate,
+      departure: draft.departureDate,
+      excludeBookingId: id,
+      bedType: draft.bedTypeFilter,
+    });
+    if (draft.linkedBookingId != null) params.set("nearBookingId", String(draft.linkedBookingId));
+    fetch(`/api/beds/available?${params}`)
+      .then((r) => r.json())
+      .then((data: { rows: BedOption[]; fallbackPairs: FallbackPair[] }) => {
+        setBedOptions(data.rows);
+        setFallbackPairs(data.fallbackPairs ?? []);
+        setDraft((d) =>
+          d && d.bedId && !data.rows.some((row) => String(row.id) === d.bedId) ? { ...d, bedId: "", partnerBedId: "" } : d
+        );
+      })
+      .catch(() => {
+        setBedOptions([]);
+        setFallbackPairs([]);
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draft?.arrivalDate, draft?.departureDate, draft?.linkedBookingId, draft?.bedTypeFilter, id]);
+
   const hasUnsavedChanges = useMemo(() => {
     if (!booking || !draft) return false;
     return (
       booking.guestName !== draft.guestName ||
       booking.arrivalDate !== draft.arrivalDate ||
       booking.departureDate !== draft.departureDate ||
-      (booking.groupId ?? "") !== draft.groupId ||
+      (booking.linkedBookingId ?? null) !== draft.linkedBookingId ||
+      (booking.sharesBedWithBookingId ?? null) !== draft.sharesBedWithBookingId ||
       (booking.bedId ? String(booking.bedId) : "") !== draft.bedId ||
+      booking.guestType !== draft.guestType ||
       JSON.stringify(booking.dietariesTags ?? []) !== JSON.stringify(dietaryTags)
     );
   }, [booking, draft, dietaryTags]);
@@ -97,8 +166,9 @@ export default function BookingDetailPage() {
         guestName: draft.guestName.trim(),
         arrivalDate: draft.arrivalDate,
         departureDate: draft.departureDate,
-        groupId: draft.groupId.trim() || null,
+        linkedBookingId: draft.linkedBookingId,
         bedId: draft.bedId || null,
+        guestType: draft.guestType,
         dietariesTags: dietaryTags.length > 0 ? dietaryTags : null,
       }),
     });
@@ -108,6 +178,37 @@ export default function BookingDetailPage() {
       const body = await res.json().catch(() => ({}));
       setError(body.error ?? "Could not save booking changes.");
       return false;
+    }
+
+    // Auto-Join Fallback: a fallback pair was picked in the Bed dropdown —
+    // join the two Singles into a double from this booking's arrival date.
+    if (draft.partnerBedId && draft.bedId) {
+      const joinRes = await fetch("/api/joined-beds", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ bed1Id: Number(draft.bedId), bed2Id: Number(draft.partnerBedId), mode: "double", startDate: draft.arrivalDate }),
+      });
+      if (!joinRes.ok) {
+        setSaving(false);
+        const body = await joinRes.json().catch(() => ({}));
+        setError(`Saved, but auto-join failed: ${body.error ?? "unknown error"}`);
+        return false;
+      }
+    }
+
+    const sharesChanged = (booking?.sharesBedWithBookingId ?? null) !== draft.sharesBedWithBookingId;
+    if (sharesChanged && draft.sharesBedWithBookingId != null && draft.bedId) {
+      const shareRes = await fetch(`/api/bookings/${id}/share-bed`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ partnerBookingId: draft.sharesBedWithBookingId }),
+      });
+      if (!shareRes.ok) {
+        setSaving(false);
+        const body = await shareRes.json().catch(() => ({}));
+        setError(`Saved, but Shares Bed With failed: ${body.error ?? "unknown error"}`);
+        return false;
+      }
     }
 
     setSaving(false);
@@ -152,10 +253,10 @@ export default function BookingDetailPage() {
 
         <div className="tr-inline-grid">
           <Field label="Arrival date">
-            <input type="date" value={draft.arrivalDate} onChange={(e) => setDraft({ ...draft, arrivalDate: e.target.value })} />
+            <DateField value={draft.arrivalDate} onChange={(iso) => setDraft({ ...draft, arrivalDate: iso })} />
           </Field>
           <Field label="Departure date">
-            <input type="date" value={draft.departureDate} onChange={(e) => setDraft({ ...draft, departureDate: e.target.value })} />
+            <DateField value={draft.departureDate} onChange={(iso) => setDraft({ ...draft, departureDate: iso })} />
           </Field>
         </div>
 
@@ -163,19 +264,66 @@ export default function BookingDetailPage() {
           {nights > 0 ? `${nights} ${nights === 1 ? "night" : "nights"}` : ""}
         </p>
 
-        <Field label="Bed">
-          <select value={draft.bedId} onChange={(e) => setDraft({ ...draft, bedId: e.target.value })}>
-            <option value="">— unassigned —</option>
-            {bedOptions.map((bed) => (
-              <option key={bed.id} value={bed.id}>
-                {bed.type}{bed.room ? ` — ${bed.room.roomName} (${bed.room.floorName})` : " (unplaced)"}
-              </option>
+        <Field label="Guest type">
+          <select value={draft.guestType} onChange={(e) => setDraft({ ...draft, guestType: e.target.value })}>
+            {GUEST_TYPES.map((g) => (
+              <option key={g.value} value={g.value}>{g.label}</option>
             ))}
           </select>
         </Field>
 
-        <Field label="Group ID">
-          <input value={draft.groupId} onChange={(e) => setDraft({ ...draft, groupId: e.target.value })} />
+        <Field label="Sleeps near / Linked with">
+          <LinkedBookingSelect
+            value={draft.linkedBookingId}
+            onChange={(id) => setDraft({ ...draft, linkedBookingId: id })}
+            arrivalDate={draft.arrivalDate}
+            departureDate={draft.departureDate}
+            excludeBookingId={booking.id}
+          />
+        </Field>
+
+        <div className="tr-inline-grid">
+          <Field label="Bed type">
+            <select
+              value={draft.bedTypeFilter}
+              onChange={(e) => setDraft({ ...draft, bedTypeFilter: e.target.value as "single" | "double", bedId: "", partnerBedId: "" })}
+            >
+              <option value="single">Single</option>
+              <option value="double">Double</option>
+            </select>
+          </Field>
+          <Field label="Bed">
+            <select
+              value={draft.bedId}
+              onChange={(e) => {
+                const bedId = e.target.value;
+                const pair = fallbackPairs.find((p) => String(p.bedId) === bedId);
+                setDraft({ ...draft, bedId, partnerBedId: pair ? String(pair.partnerBedId) : "" });
+              }}
+            >
+              <option value="">— unassigned —</option>
+              {bedOptions.map((bed) => (
+                <option key={bed.id} value={bed.id}>
+                  {bed.type} — {bed.room.roomName}
+                </option>
+              ))}
+              {fallbackPairs.map((pair) => (
+                <option key={`fallback-${pair.bedId}`} value={pair.bedId}>
+                  Single (auto-join) — {pair.roomName}
+                </option>
+              ))}
+            </select>
+          </Field>
+        </div>
+
+        <Field label="Shares bed with">
+          <ShareBedSelect
+            value={draft.sharesBedWithBookingId}
+            onChange={(id) => setDraft({ ...draft, sharesBedWithBookingId: id })}
+            arrivalDate={draft.arrivalDate}
+            departureDate={draft.departureDate}
+            excludeBookingId={booking.id}
+          />
         </Field>
 
         <Field label="Dietary tags">

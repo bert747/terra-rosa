@@ -2,8 +2,8 @@
 
 import { useEffect, useState } from "react";
 import ToastStack, { type ToastMessage } from "@/components/ToastStack";
-
-const ADD_CUSTOM_TYPE = "__add_custom__";
+import DateField from "@/components/DateField";
+import { DORM_STORAGE_FLOOR_NAME } from "@/lib/dorm-storage";
 
 function todayISO(): string {
   return new Date().toISOString().slice(0, 10);
@@ -33,34 +33,22 @@ interface Bed {
   room: BedPlacement | null;
 }
 
-interface AddBedState {
-  selected: string;
-  custom: string;
-  startDate: string;
-}
-
-interface JoinedPair {
+interface BedType {
   id: number;
-  bed1Id: number;
-  bed2Id: number;
-  startDate: string;
-  endDate: string | null;
-  mode: "double" | "solo";
+  name: string;
+  capacity: number;
 }
 
-interface JoinPickState {
-  bedAId: string;
-  bedBId: string;
-  mode: "double" | "solo";
+interface AddBedState {
+  roomId: string;
   startDate: string;
-  endDate: string;
 }
 
 export default function PropertyLayoutPage() {
   const [floors, setFloors] = useState<Floor[]>([]);
   const [rooms, setRooms] = useState<Room[]>([]);
   const [beds, setBeds] = useState<Bed[]>([]);
-  const [joins, setJoins] = useState<JoinedPair[]>([]);
+  const [bedTypes, setBedTypes] = useState<BedType[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
 
@@ -89,22 +77,24 @@ export default function PropertyLayoutPage() {
   const [floorEditValue, setFloorEditValue] = useState("");
   const [editingRoomId, setEditingRoomId] = useState<number | null>(null);
   const [roomEditValue, setRoomEditValue] = useState("");
-  const [addBedState, setAddBedState] = useState<Record<number, AddBedState>>({});
-  const [joinPickState, setJoinPickState] = useState<Record<number, JoinPickState>>({});
   const [addingFloor, setAddingFloor] = useState(false);
   const [newFloorName, setNewFloorName] = useState("");
+  const [addBedState, setAddBedState] = useState<Record<number, AddBedState>>({});
+  const [addingTypeName, setAddingTypeName] = useState("");
+  const [addingTypeCapacity, setAddingTypeCapacity] = useState<1 | 2>(1);
+  const [addingType, setAddingType] = useState(false);
 
   async function load() {
-    const [f, r, b, j] = await Promise.all([
+    const [f, r, b, t] = await Promise.all([
       fetch("/api/floors").then((res) => res.json()),
       fetch("/api/rooms").then((res) => res.json()),
       fetch("/api/beds").then((res) => res.json()),
-      fetch("/api/joined-beds").then((res) => res.json()),
+      fetch("/api/bed-types").then((res) => res.json()),
     ]);
     setFloors(f);
     setRooms(r);
     setBeds(b);
-    setJoins(j);
+    setBedTypes(t);
   }
 
   useEffect(() => {
@@ -232,28 +222,26 @@ export default function PropertyLayoutPage() {
     if (ok) load();
   }
 
-  // --- Beds --------------------------------------------------------------
+  // --- Bed inventory -----------------------------------------------------
 
-  const bedTypes = Array.from(new Set(beds.map((b) => b.type))).sort((a, b) => a.localeCompare(b));
-
-  function getAddBedState(roomId: number): AddBedState {
-    return addBedState[roomId] ?? { selected: "", custom: "", startDate: todayISO() };
+  function getAddBedState(typeId: number): AddBedState {
+    return addBedState[typeId] ?? { roomId: "", startDate: todayISO() };
   }
 
-  function setAddBedField(roomId: number, patch: Partial<AddBedState>) {
-    setAddBedState((prev) => ({ ...prev, [roomId]: { ...getAddBedState(roomId), ...patch } }));
+  function setAddBedField(typeId: number, patch: Partial<AddBedState>) {
+    setAddBedState((prev) => ({ ...prev, [typeId]: { ...getAddBedState(typeId), ...patch } }));
   }
 
-  async function submitNewBed(e: React.FormEvent, roomId: number) {
+  async function submitNewBed(e: React.FormEvent, type: BedType) {
     e.preventDefault();
-    const state = getAddBedState(roomId);
-    const type = state.selected === ADD_CUSTOM_TYPE ? state.custom.trim() : state.selected;
-    if (!type) return;
+    const state = getAddBedState(type.id);
+    const roomId = Number(state.roomId);
+    if (!roomId) return;
 
     const created = await fetch("/api/beds", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ type }),
+      body: JSON.stringify({ type: type.name }),
     });
     if (!created.ok) {
       const body = await created.json().catch(() => ({}));
@@ -270,13 +258,14 @@ export default function PropertyLayoutPage() {
       })
     );
     if (placed) {
-      setAddBedState((prev) => ({ ...prev, [roomId]: { selected: "", custom: "", startDate: todayISO() } }));
+      setAddBedState((prev) => ({ ...prev, [type.id]: { roomId: "", startDate: todayISO() } }));
       load();
     }
   }
 
   async function deleteBed(bed: Bed) {
-    if (!window.confirm(`Remove this ${bed.type} bed? Any booking on it will become unassigned.`)) return;
+    const where = bed.room ? `in ${bed.room.roomName}` : "(currently unplaced)";
+    if (!window.confirm(`Remove this ${bed.type} bed ${where}? Any booking on it will become unassigned.`)) return;
     setError(null);
     const res = await fetch(`/api/beds/${bed.id}`, { method: "DELETE" });
     if (!res.ok) {
@@ -289,65 +278,52 @@ export default function PropertyLayoutPage() {
     load();
   }
 
-  // --- Bed joining ---------------------------------------------------------
-
-  const joinedBedIds = new Set(joins.flatMap((j) => [j.bed1Id, j.bed2Id]));
-
-  function defaultJoinPick(): JoinPickState {
-    return { bedAId: "", bedBId: "", mode: "double", startDate: todayISO(), endDate: "" };
-  }
-
-  async function joinBeds(bed1Id: number, bed2Id: number, mode: "double" | "solo", startDate: string, endDate: string) {
-    setError(null);
-    const res = await fetch("/api/joined-beds", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ bed1Id, bed2Id, mode, startDate: startDate || todayISO(), endDate: endDate || null }),
-    });
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({}));
-      setError(body.error ?? "Something went wrong.");
-      return;
-    }
-    const body = await res.json();
-    notifyUnassigned(body.unassignedBookings);
-    load();
-  }
-
-  function setJoinPick(roomId: number, patch: Partial<JoinPickState>) {
-    setJoinPickState((prev) => ({ ...prev, [roomId]: { ...(prev[roomId] ?? defaultJoinPick()), ...patch } }));
-  }
-
-  async function submitJoinPick(e: React.FormEvent, roomId: number, exactPair: [number, number] | null) {
+  async function submitNewBedType(e: React.FormEvent) {
     e.preventDefault();
-    const pick = joinPickState[roomId] ?? defaultJoinPick();
-    const bed1Id = exactPair ? exactPair[0] : Number(pick.bedAId);
-    const bed2Id = exactPair ? exactPair[1] : Number(pick.bedBId);
-    if (!bed1Id || !bed2Id || bed1Id === bed2Id) return;
-    await joinBeds(bed1Id, bed2Id, pick.mode, pick.startDate, pick.endDate);
-    setJoinPickState((prev) => ({ ...prev, [roomId]: defaultJoinPick() }));
+    const name = addingTypeName.trim();
+    if (!name) return;
+    const ok = await withError(() =>
+      fetch("/api/bed-types", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, capacity: addingTypeCapacity }),
+      })
+    );
+    if (ok) {
+      setAddingTypeName("");
+      setAddingTypeCapacity(1);
+      setAddingType(false);
+      load();
+    }
   }
 
-  async function splitJoin(join: JoinedPair) {
-    if (!window.confirm("Split this joined double back into two single beds, effective today?")) return;
-    const ok = await withError(() => fetch(`/api/joined-beds/${join.id}`, { method: "PATCH" }));
-    if (ok) load();
+  const roomsByFloor = new Map<number, Room[]>();
+  for (const room of rooms) {
+    const list = roomsByFloor.get(room.floorId) ?? [];
+    list.push(room);
+    roomsByFloor.set(room.floorId, list);
   }
+  const floorNameById = new Map(floors.map((f) => [f.id, f.name]));
 
   return (
     <div className="tr-shell">
       <h1 style={{ fontSize: 18, margin: "0 0 12px" }}>Property Layout</h1>
-      <p className="tr-muted" style={{ marginTop: 0, marginBottom: 16, fontSize: 13 }}>
-        Physical layout is independent of bookings: beds can be added, removed, or placed in any room, whether or
-        not anyone is currently booked into them.
-      </p>
       {error && <p className="tr-badge tr-badge-warn" style={{ marginBottom: 12 }}>{error}</p>}
+
+      {/* --- Floors & rooms --------------------------------------------- */}
+      <p className="tr-muted" style={{ marginTop: 0, marginBottom: 16, fontSize: 13 }}>
+        Floors and rooms are the property&apos;s fixed structure. Where a bed sits, and any solo/couple double
+        joins, are day-to-day layout — set those on the Dorm Board grid instead.
+      </p>
 
       {floors.length === 0 && (
         <p className="tr-muted" style={{ marginBottom: 12 }}>No floors yet — add one below to get started.</p>
       )}
 
-      {floors.map((floor) => {
+      {/* "Storage" holds the system-managed Dorm Storage room (see
+          src/lib/dorm-storage.ts) — not part of the user-managed physical
+          layout, so it's hidden here rather than editable/deletable. */}
+      {floors.filter((floor) => floor.name !== DORM_STORAGE_FLOOR_NAME).map((floor) => {
         const floorRooms = rooms.filter((r) => r.floorId === floor.id);
         const collapsed = collapsedFloorIds.has(floor.id);
 
@@ -392,197 +368,34 @@ export default function PropertyLayoutPage() {
                   <p className="tr-muted" style={{ fontSize: 13, marginTop: 0 }}>No rooms on this floor yet.</p>
                 )}
 
-                {floorRooms.map((room) => {
-                  const roomBeds = beds.filter((bed) => bed.room?.roomId === room.id);
-                  const addState = getAddBedState(room.id);
+                {floorRooms.map((room) => (
+                  <div
+                    key={room.id}
+                    style={{ display: "flex", alignItems: "center", gap: 8, borderTop: "1px solid var(--tr-border)", padding: "8px 0" }}
+                  >
+                    {editingRoomId === room.id ? (
+                      <form onSubmit={(e) => submitRoomEdit(e, room)} style={{ display: "flex", gap: 6, flex: 1 }}>
+                        <input
+                          autoFocus
+                          value={roomEditValue}
+                          onChange={(e) => setRoomEditValue(e.target.value)}
+                          style={{ width: 220 }}
+                        />
+                        <button type="submit" className="primary">Save</button>
+                        <button type="button" onClick={() => setEditingRoomId(null)}>Cancel</button>
+                      </form>
+                    ) : (
+                      <strong style={{ flex: 1 }}>{room.name}</strong>
+                    )}
 
-                  const roomBedIds = new Set(roomBeds.map((bed) => bed.id));
-                  const roomJoins = joins.filter(
-                    (j) => roomBedIds.has(j.bed1Id) && roomBedIds.has(j.bed2Id)
-                  );
-                  const partnerOf = new Map<number, number>();
-                  const joinIdByBed = new Map<number, number>();
-                  for (const j of roomJoins) {
-                    partnerOf.set(j.bed1Id, j.bed2Id);
-                    partnerOf.set(j.bed2Id, j.bed1Id);
-                    joinIdByBed.set(j.bed1Id, j.id);
-                    joinIdByBed.set(j.bed2Id, j.id);
-                  }
-
-                  const unjoinedSingles = roomBeds.filter(
-                    (bed) => bed.type.toLowerCase() === "single" && !joinedBedIds.has(bed.id)
-                  );
-                  const pick = joinPickState[room.id] ?? defaultJoinPick();
-
-                  const visited = new Set<number>();
-                  const bedRows: React.ReactNode[] = [];
-                  for (const bed of roomBeds) {
-                    if (visited.has(bed.id)) continue;
-                    const partnerId = partnerOf.get(bed.id);
-                    const partner = partnerId != null ? roomBeds.find((b) => b.id === partnerId) : undefined;
-
-                    if (partner) {
-                      visited.add(bed.id);
-                      visited.add(partner.id);
-                      const joinId = joinIdByBed.get(bed.id)!;
-                      const joinInfo = joins.find((j) => j.id === joinId)!;
-                      const modeLabel = joinInfo.mode === "solo" ? "Solo Double (sleeps 1)" : "Double (sleeps 2)";
-                      const dateLabel =
-                        joinInfo.startDate > todayISO()
-                          ? ` — starts ${joinInfo.startDate}`
-                          : joinInfo.endDate
-                            ? ` — until ${joinInfo.endDate}`
-                            : "";
-                      bedRows.push(
-                        <li
-                          key={`join-${joinId}`}
-                          style={{ display: "flex", alignItems: "center", gap: 8, padding: "3px 0", fontSize: 13 }}
-                        >
-                          <span style={{ flex: 1 }}>
-                            {modeLabel} (2 Single beds){dateLabel}
-                          </span>
-                          <button type="button" onClick={() => splitJoin({ id: joinId, bed1Id: bed.id, bed2Id: partner.id, startDate: joinInfo.startDate, endDate: joinInfo.endDate, mode: joinInfo.mode })}>
-                            Split
-                          </button>
-                        </li>
-                      );
-                      continue;
-                    }
-
-                    visited.add(bed.id);
-                    bedRows.push(
-                      <li
-                        key={bed.id}
-                        style={{ display: "flex", alignItems: "center", gap: 8, padding: "3px 0", fontSize: 13 }}
-                      >
-                        <span style={{ flex: 1 }}>{bed.type}</span>
-                        <button type="button" className="tr-danger" onClick={() => deleteBed(bed)}>
-                          Remove
-                        </button>
-                      </li>
-                    );
-                  }
-
-                  return (
-                    <div
-                      key={room.id}
-                      style={{ borderTop: "1px solid var(--tr-border)", padding: "10px 0" }}
-                    >
-                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                        {editingRoomId === room.id ? (
-                          <form onSubmit={(e) => submitRoomEdit(e, room)} style={{ display: "flex", gap: 6, flex: 1 }}>
-                            <input
-                              autoFocus
-                              value={roomEditValue}
-                              onChange={(e) => setRoomEditValue(e.target.value)}
-                              style={{ width: 220 }}
-                            />
-                            <button type="submit" className="primary">Save</button>
-                            <button type="button" onClick={() => setEditingRoomId(null)}>Cancel</button>
-                          </form>
-                        ) : (
-                          <strong style={{ flex: 1 }}>{room.name}</strong>
-                        )}
-
-                        {editingRoomId !== room.id && (
-                          <div style={{ display: "flex", gap: 6 }}>
-                            <button type="button" onClick={() => startEditRoom(room)}>Rename</button>
-                            <button type="button" className="tr-danger" onClick={() => deleteRoom(room)}>Delete</button>
-                          </div>
-                        )}
+                    {editingRoomId !== room.id && (
+                      <div style={{ display: "flex", gap: 6 }}>
+                        <button type="button" onClick={() => startEditRoom(room)}>Rename</button>
+                        <button type="button" className="tr-danger" onClick={() => deleteRoom(room)}>Delete</button>
                       </div>
-
-                      <div style={{ marginTop: 8, marginLeft: 12 }}>
-                        {bedRows.length === 0 ? (
-                          <p className="tr-muted" style={{ fontSize: 13, margin: "0 0 8px" }}>No beds in this room yet.</p>
-                        ) : (
-                          <ul style={{ listStyle: "none", margin: "0 0 8px", padding: 0 }}>{bedRows}</ul>
-                        )}
-
-                        <form onSubmit={(e) => submitNewBed(e, room.id)} style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: unjoinedSingles.length >= 2 ? 8 : 0 }}>
-                          <select
-                            value={addState.selected}
-                            onChange={(e) => setAddBedField(room.id, { selected: e.target.value })}
-                          >
-                            <option value="">— select bed type —</option>
-                            {bedTypes.map((type) => (
-                              <option key={type} value={type}>{type}</option>
-                            ))}
-                            <option value={ADD_CUSTOM_TYPE}>Add new type...</option>
-                          </select>
-                          {addState.selected === ADD_CUSTOM_TYPE && (
-                            <input
-                              autoFocus
-                              value={addState.custom}
-                              onChange={(e) => setAddBedField(room.id, { custom: e.target.value })}
-                              placeholder="New bed type"
-                              style={{ width: 160 }}
-                            />
-                          )}
-                          <label className="tr-muted" style={{ fontSize: 12 }}>
-                            Starting{" "}
-                            <input
-                              type="date"
-                              value={addState.startDate}
-                              onChange={(e) => setAddBedField(room.id, { startDate: e.target.value })}
-                            />
-                          </label>
-                          <button type="submit" className="primary">Add Bed</button>
-                        </form>
-
-                        {unjoinedSingles.length >= 2 && (
-                          <form
-                            onSubmit={(e) =>
-                              submitJoinPick(
-                                e,
-                                room.id,
-                                unjoinedSingles.length === 2 ? [unjoinedSingles[0].id, unjoinedSingles[1].id] : null
-                              )
-                            }
-                            style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}
-                          >
-                            <span className="tr-muted" style={{ fontSize: 12 }}>Join:</span>
-                            {unjoinedSingles.length > 2 && (
-                              <>
-                                <select value={pick.bedAId} onChange={(e) => setJoinPick(room.id, { bedAId: e.target.value })}>
-                                  <option value="">— Single A —</option>
-                                  {unjoinedSingles.map((bed, i) => (
-                                    <option key={bed.id} value={bed.id} disabled={String(bed.id) === pick.bedBId}>
-                                      Single {i + 1}
-                                    </option>
-                                  ))}
-                                </select>
-                                <select value={pick.bedBId} onChange={(e) => setJoinPick(room.id, { bedBId: e.target.value })}>
-                                  <option value="">— Single B —</option>
-                                  {unjoinedSingles.map((bed, i) => (
-                                    <option key={bed.id} value={bed.id} disabled={String(bed.id) === pick.bedAId}>
-                                      Single {i + 1}
-                                    </option>
-                                  ))}
-                                </select>
-                              </>
-                            )}
-                            <select value={pick.mode} onChange={(e) => setJoinPick(room.id, { mode: e.target.value as "double" | "solo" })}>
-                              <option value="double">Double (sleeps 2)</option>
-                              <option value="solo">Solo Double (sleeps 1)</option>
-                            </select>
-                            <label className="tr-muted" style={{ fontSize: 12 }}>
-                              From{" "}
-                              <input type="date" value={pick.startDate} onChange={(e) => setJoinPick(room.id, { startDate: e.target.value })} />
-                            </label>
-                            <label className="tr-muted" style={{ fontSize: 12 }}>
-                              Until (optional){" "}
-                              <input type="date" value={pick.endDate} onChange={(e) => setJoinPick(room.id, { endDate: e.target.value })} />
-                            </label>
-                            <button type="submit" className="primary">
-                              Join as Double
-                            </button>
-                          </form>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
+                    )}
+                  </div>
+                ))}
 
                 {addingRoomFloorId === floor.id ? (
                   <form
@@ -610,7 +423,7 @@ export default function PropertyLayoutPage() {
         );
       })}
 
-      <div className="tr-card">
+      <div className="tr-card" style={{ marginBottom: 24 }}>
         {addingFloor ? (
           <form onSubmit={submitNewFloor} style={{ display: "flex", gap: 8 }}>
             <input
@@ -626,6 +439,105 @@ export default function PropertyLayoutPage() {
         ) : (
           <button type="button" className="primary" onClick={() => setAddingFloor(true)}>
             + Add Floor
+          </button>
+        )}
+      </div>
+
+      {/* --- Bed inventory ------------------------------------------------ */}
+      <h1 style={{ fontSize: 18, margin: "0 0 4px" }}>Bed Inventory</h1>
+      <p className="tr-muted" style={{ marginTop: 0, marginBottom: 16, fontSize: 13 }}>
+        Add a bed here when you buy one, remove one when it breaks. Each bed type below lists every bed of that
+        type and which room it&apos;s currently in.
+      </p>
+
+      {bedTypes.map((type) => {
+        const bedsOfType = beds.filter((b) => b.type === type.name);
+        const addState = getAddBedState(type.id);
+
+        return (
+          <div className="tr-card" key={type.id} style={{ marginBottom: 12 }}>
+            <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 8 }}>
+              <strong>{type.name}</strong>
+              <span className="tr-muted" style={{ fontSize: 12 }}>
+                sleeps {type.capacity} · {bedsOfType.length} in inventory
+              </span>
+            </div>
+
+            {bedsOfType.length === 0 ? (
+              <p className="tr-muted" style={{ fontSize: 13, margin: "0 0 8px" }}>None yet.</p>
+            ) : (
+              <ul style={{ listStyle: "none", margin: "0 0 8px", padding: 0 }}>
+                {bedsOfType.map((bed) => (
+                  <li key={bed.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "3px 0", fontSize: 13 }}>
+                    <span style={{ flex: 1 }}>
+                      {bed.room ? `${bed.room.roomName} (${bed.room.floorName})` : <span className="tr-muted">Unplaced</span>}
+                    </span>
+                    <button type="button" className="tr-danger" onClick={() => deleteBed(bed)}>
+                      Remove
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+
+            <form onSubmit={(e) => submitNewBed(e, type)} style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+              <select
+                value={addState.roomId}
+                onChange={(e) => setAddBedField(type.id, { roomId: e.target.value })}
+              >
+                <option value="">— which room? —</option>
+                {floors.filter((f) => f.name !== DORM_STORAGE_FLOOR_NAME).map((floor) => (
+                  <optgroup key={floor.id} label={floorNameById.get(floor.id)}>
+                    {(roomsByFloor.get(floor.id) ?? []).map((room) => (
+                      <option key={room.id} value={room.id}>{room.name}</option>
+                    ))}
+                  </optgroup>
+                ))}
+              </select>
+              <label className="tr-muted" style={{ fontSize: 12 }}>
+                Starting{" "}
+                <DateField value={addState.startDate} onChange={(iso) => setAddBedField(type.id, { startDate: iso })} />
+              </label>
+              <button type="submit" className="primary">Add {type.name}</button>
+            </form>
+          </div>
+        );
+      })}
+
+      <div className="tr-card">
+        {addingType ? (
+          <form onSubmit={submitNewBedType} style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+            <input
+              autoFocus
+              value={addingTypeName}
+              onChange={(e) => setAddingTypeName(e.target.value)}
+              placeholder="Bed type name (e.g. Bunk)"
+              style={{ width: 220 }}
+            />
+            <label style={{ fontSize: 13, display: "flex", alignItems: "center", gap: 4 }}>
+              <input
+                type="radio"
+                name="capacity"
+                checked={addingTypeCapacity === 1}
+                onChange={() => setAddingTypeCapacity(1)}
+              />
+              Sleeps 1
+            </label>
+            <label style={{ fontSize: 13, display: "flex", alignItems: "center", gap: 4 }}>
+              <input
+                type="radio"
+                name="capacity"
+                checked={addingTypeCapacity === 2}
+                onChange={() => setAddingTypeCapacity(2)}
+              />
+              Sleeps 2
+            </label>
+            <button type="submit" className="primary">Add Bed Type</button>
+            <button type="button" onClick={() => setAddingType(false)}>Cancel</button>
+          </form>
+        ) : (
+          <button type="button" className="primary" onClick={() => setAddingType(true)}>
+            + Add a New Bed Type
           </button>
         )}
       </div>
