@@ -2,17 +2,24 @@
 
 import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { isIsoDate, nightsBetween } from "@/lib/dates";
+import { formatDateUk, isIsoDate, nightsBetween } from "@/lib/dates";
 import DietaryTagInput from "@/components/DietaryTagInput";
 import DateField from "@/components/DateField";
-import LinkedBookingSelect from "@/components/LinkedBookingSelect";
-import ShareBedSelect from "@/components/ShareBedSelect";
-import { STANDARD_DIETARY_TAGS } from "@/lib/dietary-tags";
+import SharesWithSelect, { SharesWithMode } from "@/components/SharesWithSelect";
+import ConfirmModal, { type ConfirmModalState } from "@/components/ConfirmModal";
+import { useDietaryTagSuggestions } from "@/lib/use-dietary-tag-suggestions";
 
 interface BedOption {
   id: number;
   type: string;
   room: { roomId: number; roomName: string; floorId: number; floorName: string };
+  sharesWith: { bookingId: number; guestName: string; arrivalDate: string; departureDate: string } | null;
+}
+
+function bedOptionLabel(bed: BedOption): string {
+  const base = `${bed.type} — ${bed.room.roomName}`;
+  if (!bed.sharesWith) return base;
+  return `${base} (shares with ${bed.sharesWith.guestName}, ${formatDateUk(bed.sharesWith.arrivalDate)}–${formatDateUk(bed.sharesWith.departureDate)})`;
 }
 
 interface FallbackPair {
@@ -26,6 +33,7 @@ const GUEST_TYPES: { value: string; label: string }[] = [
   { value: "guest", label: "Guest" },
   { value: "resident", label: "Resident" },
   { value: "ashrami", label: "Ashrami" },
+  { value: "friends_family", label: "Friends & Family" },
 ];
 
 export default function NewBookingPage() {
@@ -53,6 +61,9 @@ function NewBookingForm() {
   const prefillArrival = dateParam(search.get("arrival"));
   const prefillDeparture = dateParam(search.get("departure"));
   const prefillBedId = search.get("bedId") ?? "";
+  // ?from=grid so Save/Cancel return there instead of always landing on the
+  // bookings list — same convention the edit page already uses.
+  const backHref = search.get("from") === "grid" ? "/grid" : "/bookings";
 
   const arrivalDefault = prefillArrival || new Date().toISOString().slice(0, 10);
   const departureDefault = prefillDeparture || addDaysIso(arrivalDefault, 1);
@@ -61,19 +72,24 @@ function NewBookingForm() {
   const [bedOptions, setBedOptions] = useState<BedOption[]>([]);
   const [fallbackPairs, setFallbackPairs] = useState<FallbackPair[]>([]);
   const [saving, setSaving] = useState(false);
+  const [confirmModal, setConfirmModal] = useState<ConfirmModalState | null>(null);
 
   const [form, setForm] = useState({
-    guestName: "",
+    firstName: "",
+    lastName: "",
+    preferredName: "",
+    notes: "",
     arrivalDate: arrivalDefault,
     departureDate: departureDefault,
-    linkedBookingId: null as number | null,
-    sharesBedWithBookingId: null as number | null,
+    sharesWithId: null as number | null,
+    sharesWithMode: "room" as SharesWithMode,
     bedTypeFilter: "single" as "single" | "double",
     bedId: prefillBedId,
     partnerBedId: "" as string,
     guestType: "guest",
   });
   const [dietaryTags, setDietaryTags] = useState<string[]>([]);
+  const dietarySuggestions = useDietaryTagSuggestions();
 
   useEffect(() => {
     if (!isIsoDate(form.arrivalDate) || !isIsoDate(form.departureDate) || form.departureDate <= form.arrivalDate) {
@@ -82,53 +98,85 @@ function NewBookingForm() {
       return;
     }
     const params = new URLSearchParams({ arrival: form.arrivalDate, departure: form.departureDate, bedType: form.bedTypeFilter });
-    if (form.linkedBookingId != null) params.set("nearBookingId", String(form.linkedBookingId));
+    if (form.sharesWithMode === "room" && form.sharesWithId != null) params.set("nearBookingId", String(form.sharesWithId));
+    if (form.sharesWithMode === "bed" && form.sharesWithId != null) params.set("shareBedWithBookingId", String(form.sharesWithId));
     fetch(`/api/beds/available?${params}`)
       .then((r) => r.json())
       .then((data: { rows: BedOption[]; fallbackPairs: FallbackPair[] }) => {
         setBedOptions(data.rows);
         setFallbackPairs(data.fallbackPairs ?? []);
-        // The previously-picked bed can fall out of the list when the
-        // dates/bed type change or a "sleeps near" pick narrows it down to
-        // a different room — never leave a stale selection the dropdown no
-        // longer offers.
-        setForm((f) =>
-          f.bedId && !data.rows.some((b) => String(b.id) === f.bedId) ? { ...f, bedId: "", partnerBedId: "" } : f
-        );
+        // The previously-picked bed can fall out of this list when the
+        // dates/bed type change or a "sleeps near" pick narrows it to a
+        // different room — deliberately NOT auto-cleared here: silently
+        // dropping a selection the user can't see happen is worse than
+        // leaving it and letting the real capacity check on submit catch a
+        // genuine conflict.
       })
       .catch(() => {
         setBedOptions([]);
         setFallbackPairs([]);
       });
-  }, [form.arrivalDate, form.departureDate, form.linkedBookingId, form.bedTypeFilter]);
+  }, [form.arrivalDate, form.departureDate, form.sharesWithId, form.sharesWithMode, form.bedTypeFilter]);
 
   const nights = nightsBetween(form.arrivalDate, form.departureDate);
 
-  async function handleSubmit(e: React.FormEvent) {
+  function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    setSaving(true);
     setError(null);
 
-    if (!form.guestName.trim()) {
-      setSaving(false);
-      setError("Guest name is required.");
+    if (!form.firstName.trim()) {
+      setError("First name is required.");
       return;
     }
     if (!form.arrivalDate || !form.departureDate || form.departureDate <= form.arrivalDate) {
-      setSaving(false);
       setError("Valid arrival/departure dates are required.");
       return;
     }
+
+    // Picking a bed the dropdown already labeled "shares with X" is a real
+    // decision worth a beat to confirm — staff can pick the wrong row in a
+    // dropdown as easily as anywhere else, and undoing a same-bed pairing
+    // after the fact is more work than catching it here. "No" clears the
+    // pick entirely (bed AND the Shares With fields it just auto-filled)
+    // rather than leaving a half-set, confusing state — see the bed
+    // <select>'s own onChange for where that auto-fill happens.
+    const chosenBed = bedOptions.find((b) => String(b.id) === form.bedId);
+    const directPairOccupant = chosenBed?.sharesWith ?? null;
+    if (directPairOccupant) {
+      setConfirmModal({
+        title: "Share a bed?",
+        message: `Do you want ${form.firstName.trim() || "this guest"} to share a bed with ${directPairOccupant.guestName}?`,
+        confirmLabel: "Yes, share the bed",
+        secondaryLabel: "No, choose another bed",
+        onConfirm: () => performSubmit(),
+        onSecondary: () => {
+          setForm((f) => ({ ...f, bedId: "", partnerBedId: "", sharesWithId: null, sharesWithMode: "room" }));
+        },
+      });
+      return;
+    }
+    performSubmit();
+  }
+
+  async function performSubmit() {
+    setSaving(true);
+    setError(null);
+
+    const chosenBed = bedOptions.find((b) => String(b.id) === form.bedId);
+    const directPairOccupant = chosenBed?.sharesWith ?? null;
 
     const res = await fetch("/api/bookings", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        guestName: form.guestName.trim(),
+        firstName: form.firstName.trim(),
+        lastName: form.lastName.trim(),
+        preferredName: form.preferredName.trim() || null,
+        notes: form.notes.trim() || null,
         arrivalDate: form.arrivalDate,
         departureDate: form.departureDate,
-        linkedBookingId: form.linkedBookingId,
-        bedId: form.bedId || null,
+        linkedBookingId: form.sharesWithMode === "room" ? form.sharesWithId : null,
+        bedId: directPairOccupant ? null : form.bedId || null,
         partnerBedId: form.partnerBedId || null,
         guestType: form.guestType,
         dietariesTags: dietaryTags.length > 0 ? dietaryTags : null,
@@ -144,11 +192,28 @@ function NewBookingForm() {
 
     const booking = await res.json();
 
-    if (form.sharesBedWithBookingId != null && form.bedId) {
+    if (directPairOccupant) {
+      const pairRes = await fetch(`/api/bookings/${booking.id}/pair-into-bed`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          otherBookingId: directPairOccupant.bookingId,
+          bedId: chosenBed!.id,
+          arrivalDate: form.arrivalDate,
+          departureDate: form.departureDate,
+        }),
+      });
+      if (!pairRes.ok) {
+        setSaving(false);
+        const body = await pairRes.json().catch(() => ({}));
+        setError(`Booking created, but placing them in the bed failed: ${body.error ?? "unknown error"}`);
+        return;
+      }
+    } else if (form.sharesWithMode === "bed" && form.sharesWithId != null && form.bedId) {
       const shareRes = await fetch(`/api/bookings/${booking.id}/share-bed`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ partnerBookingId: form.sharesBedWithBookingId }),
+        body: JSON.stringify({ partnerBookingId: form.sharesWithId }),
       });
       if (!shareRes.ok) {
         setSaving(false);
@@ -159,30 +224,49 @@ function NewBookingForm() {
     }
 
     setSaving(false);
-    router.push("/bookings");
+    router.push(backHref);
   }
 
   return (
     <div className="tr-shell" style={{ maxWidth: 720 }}>
-      <h1 className="tr-page-title">New Booking</h1>
+      <h1 className="tr-page-title">New booking</h1>
       {error && <p className="tr-badge tr-badge-warn" style={{ marginBottom: 12 }}>{error}</p>}
+      <ConfirmModal state={confirmModal} onClose={() => setConfirmModal(null)} />
 
       <form onSubmit={handleSubmit} className="tr-card">
-        <Field label="Guest name" required>
-          <input
-            required
-            value={form.guestName}
-            onChange={(e) => setForm({ ...form, guestName: e.target.value })}
-            placeholder="Full name"
-          />
-        </Field>
+        <div className="tr-inline-grid-3">
+          <Field label="First name" required>
+            <input
+              required
+              value={form.firstName}
+              onChange={(e) => setForm({ ...form, firstName: e.target.value })}
+            />
+          </Field>
+          <Field label="Last name">
+            <input value={form.lastName} onChange={(e) => setForm({ ...form, lastName: e.target.value })} />
+          </Field>
+          <Field label="Preferred name">
+            <input
+              value={form.preferredName}
+              onChange={(e) => setForm({ ...form, preferredName: e.target.value })}
+              placeholder="Optional — shown on the grid"
+            />
+          </Field>
+        </div>
 
-        <div className="tr-inline-grid">
+        <div className="tr-inline-grid-3">
           <Field label="Arrival date" required>
             <DateField required value={form.arrivalDate} onChange={(iso) => setForm({ ...form, arrivalDate: iso })} />
           </Field>
           <Field label="Departure date" required>
             <DateField required value={form.departureDate} onChange={(iso) => setForm({ ...form, departureDate: iso })} />
+          </Field>
+          <Field label="Guest type">
+            <select value={form.guestType} onChange={(e) => setForm({ ...form, guestType: e.target.value })}>
+              {GUEST_TYPES.map((g) => (
+                <option key={g.value} value={g.value}>{g.label}</option>
+              ))}
+            </select>
           </Field>
         </div>
 
@@ -190,24 +274,7 @@ function NewBookingForm() {
           {nights > 0 ? `${nights} ${nights === 1 ? "night" : "nights"}` : "Select both dates."}
         </p>
 
-        <Field label="Guest type">
-          <select value={form.guestType} onChange={(e) => setForm({ ...form, guestType: e.target.value })}>
-            {GUEST_TYPES.map((g) => (
-              <option key={g.value} value={g.value}>{g.label}</option>
-            ))}
-          </select>
-        </Field>
-
-        <Field label="Sleeps near / Linked with">
-          <LinkedBookingSelect
-            value={form.linkedBookingId}
-            onChange={(id) => setForm({ ...form, linkedBookingId: id })}
-            arrivalDate={form.arrivalDate}
-            departureDate={form.departureDate}
-          />
-        </Field>
-
-        <div className="tr-inline-grid">
+        <div className="tr-inline-grid-3">
           <Field label="Bed type">
             <select
               value={form.bedTypeFilter}
@@ -219,19 +286,41 @@ function NewBookingForm() {
               <option value="double">Double</option>
             </select>
           </Field>
+          <Field label="Shares with">
+            <SharesWithSelect
+              bookingId={form.sharesWithId}
+              mode={form.sharesWithMode}
+              onChange={(id, mode) => setForm({ ...form, sharesWithId: id, sharesWithMode: mode })}
+              arrivalDate={form.arrivalDate}
+              departureDate={form.departureDate}
+            />
+          </Field>
           <Field label="Bed">
             <select
               value={form.bedId}
               onChange={(e) => {
                 const bedId = e.target.value;
                 const pair = fallbackPairs.find((p) => String(p.bedId) === bedId);
-                setForm({ ...form, bedId, partnerBedId: pair ? String(pair.partnerBedId) : "" });
+                const chosen = bedOptions.find((b) => String(b.id) === bedId);
+                setForm({
+                  ...form,
+                  bedId,
+                  partnerBedId: pair ? String(pair.partnerBedId) : "",
+                  // Picking a bed that's already got someone in it (a native
+                  // double/1.5-bed's free slot) IS the "shares with, same
+                  // bed" decision — reflect that in the Shares With field
+                  // itself instead of leaving it looking untouched while the
+                  // pairing happens invisibly underneath. Only auto-fills;
+                  // never overwrites a Shares With the guest had already
+                  // picked some other way.
+                  ...(chosen?.sharesWith ? { sharesWithId: chosen.sharesWith.bookingId, sharesWithMode: "bed" as SharesWithMode } : {}),
+                });
               }}
             >
               <option value="">— unassigned —</option>
               {bedOptions.map((bed) => (
                 <option key={bed.id} value={bed.id}>
-                  {bed.type} — {bed.room.roomName}
+                  {bedOptionLabel(bed)}
                 </option>
               ))}
               {fallbackPairs.map((pair) => (
@@ -249,28 +338,30 @@ function NewBookingForm() {
           </p>
         )}
 
-        <Field label="Shares bed with">
-          <ShareBedSelect
-            value={form.sharesBedWithBookingId}
-            onChange={(id) => setForm({ ...form, sharesBedWithBookingId: id })}
-            arrivalDate={form.arrivalDate}
-            departureDate={form.departureDate}
-          />
-        </Field>
-        {form.sharesBedWithBookingId != null && !form.bedId && (
+        {form.sharesWithMode === "bed" && form.sharesWithId != null && !form.bedId && (
           <p className="tr-muted" style={{ fontSize: 12, marginTop: -6, marginBottom: 10 }}>
             Pick a Single bed above — the partner booking will automatically get the next bed down in the same room.
           </p>
         )}
 
         <Field label="Dietary tags">
-          <DietaryTagInput tags={dietaryTags} onChange={setDietaryTags} suggestions={STANDARD_DIETARY_TAGS} placeholder="e.g. Gluten-Free" />
+          <DietaryTagInput tags={dietaryTags} onChange={setDietaryTags} suggestions={dietarySuggestions} placeholder="e.g. Gluten-Free" />
+        </Field>
+
+        <Field label="Notes">
+          <textarea
+            value={form.notes}
+            onChange={(e) => setForm({ ...form, notes: e.target.value })}
+            placeholder="Optional — shown as a corner marker on the grid pill"
+            rows={2}
+            style={{ resize: "vertical" }}
+          />
         </Field>
 
         <div className="tr-form-actions">
-          <button type="button" onClick={() => router.push("/bookings")}>Cancel</button>
+          <button type="button" onClick={() => router.push(backHref)}>Cancel</button>
           <button type="submit" className="primary" disabled={saving}>
-            {saving ? "Saving..." : "Create Booking"}
+            {saving ? "Saving..." : "Create booking"}
           </button>
         </div>
       </form>

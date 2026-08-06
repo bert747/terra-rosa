@@ -41,6 +41,26 @@ export const floors = pgTable("floors", {
   name: text("name").notNull(),
 });
 
+// A named group of "interchangeable" rooms (e.g. "Courtyard & Sea Rooms",
+// "Monks Rooms") — see src/lib/allocation-fixes.ts, which only ever
+// proposes moving a booking into another room in the SAME category as a
+// fix/move suggestion. `rank` is a plain manually-set sort order (lower =
+// more premium), edited by drag-to-reorder in Layout settings — nothing
+// here computes it automatically, since the actual premium-ness ordering
+// is a judgement call for the property owners, not something this app can
+// infer from room names/sizes. Deliberately a flat, always-current
+// assignment (a room belongs to at most one category, right now) rather
+// than date-scoped — see that same file's own note on why: real premium
+// events do temporarily change which rooms are interchangeable, but that's
+// handled today by manually re-pointing a room's category before/after the
+// event, the same way every other layout change in this app already works,
+// rather than adding a second date-scoped history table on top of this one.
+export const roomCategories = pgTable("room_categories", {
+  id: serial("id").primaryKey(),
+  name: text("name").notNull(),
+  rank: integer("rank").notNull().default(0),
+});
+
 export const rooms = pgTable("rooms", {
   id: serial("id").primaryKey(),
   floorId: integer("floor_id")
@@ -53,6 +73,15 @@ export const rooms = pgTable("rooms", {
   // skips any room with this set; the /settings/layout page also hides it,
   // since it isn't part of the user-managed physical layout.
   excludeFromCapacity: boolean("exclude_from_capacity").notNull().default(false),
+  // Which "interchangeable rooms" group this room belongs to, if any — null
+  // means genuinely one-of-a-kind (never offered as a swap for anything,
+  // never has anything swapped in for it either). See roomCategories above.
+  categoryId: integer("category_id").references((): AnyPgColumn => roomCategories.id, { onDelete: "set null" }),
+  // Never offered as a Fix/move-suggestion target, full stop, regardless of
+  // category — the owner's own room, the chef's room, the caravan, and (for
+  // now — see the friends_family guest type) the rooms only ever used for
+  // friends & family guests, which staff still place by hand.
+  excludeFromSuggestions: boolean("exclude_from_suggestions").notNull().default(false),
 });
 
 // The catalogue of bed types staff can add inventory of — managed from
@@ -143,20 +172,73 @@ export const bedSoloPeriods = pgTable("bed_solo_periods", {
 // allocation) — unlike linkedBookingId ("Sleeps near", one-directional hint
 // only), both bookings in a couple point at each other so either side can be
 // followed to find its partner and the joined_beds row backing the double.
+// splitGroupId identifies a split lineage: every booking descended from the
+// same original split-into-pieces stay shares the SAME value, which is the
+// id of the very first (root) booking in that lineage — including the root
+// itself, once it's been split at least once (see POST /api/bookings/[id]/
+// split). A plain, never-split booking has this null. This is what lets the
+// grid pill/booking-edit-page "jump to the other part" arrows and "Merge"
+// find every sibling with one query (`WHERE split_group_id = X`) instead of
+// guessing from guest name + adjacent dates.
 export const bookings = pgTable("bookings", {
   id: serial("id").primaryKey(),
+  // The record of truth everywhere EXCEPT the grid pill and the booking
+  // form itself (bookings list, exports, daily sheet, allocation-issue
+  // text, "Shares Bed With" pickers, …) — kept automatically in sync as
+  // `${firstName} ${lastName}`.trim() by the bookings API whenever either
+  // of those changes, so every one of those call sites keeps working
+  // unchanged rather than needing to be taught about the two new fields.
   guestName: text("guest_name").notNull(),
+  firstName: text("first_name").notNull(),
+  lastName: text("last_name").notNull(),
+  // Optional short/preferred form of firstName — used ONLY to pick what the
+  // grid pill shows (see pillDisplayName in GridCanvas.tsx), since a first
+  // name is sometimes not what someone actually goes by.
+  preferredName: text("preferred_name"),
   arrivalDate: date("arrival_date").notNull(),
   departureDate: date("departure_date").notNull(),
   linkedBookingId: integer("linked_booking_id").references((): AnyPgColumn => bookings.id, { onDelete: "set null" }),
   sharesBedWithBookingId: integer("shares_bed_with_booking_id").references((): AnyPgColumn => bookings.id, { onDelete: "set null" }),
+  splitGroupId: integer("split_group_id").references((): AnyPgColumn => bookings.id, { onDelete: "set null" }),
   bedId: integer("bed_id").references(() => beds.id, { onDelete: "set null" }),
   dietariesTags: jsonb("dietaries_tags"),
-  guestType: text("guest_type", { enum: ["resident", "ashrami", "guest"] }).notNull().default("guest"),
+  guestType: text("guest_type", { enum: ["resident", "ashrami", "guest", "friends_family"] }).notNull().default("guest"),
+  // A free-text staff note, surfaced on the grid pill as a small folded-
+  // corner marker (like an Excel cell comment) rather than always-visible
+  // text — for anything worth flagging on a specific booking (a request, a
+  // quirk, a heads-up for the next shift) that doesn't belong in any of the
+  // other structured fields.
+  notes: text("notes"),
 }, (table) => ({
   bedIdIdx: index("bookings_bed_id_idx").on(table.bedId),
   linkedBookingIdIdx: index("bookings_linked_booking_id_idx").on(table.linkedBookingId),
   sharesBedWithBookingIdIdx: index("bookings_shares_bed_with_booking_id_idx").on(table.sharesBedWithBookingId),
+  splitGroupIdIdx: index("bookings_split_group_id_idx").on(table.splitGroupId),
+}));
+
+// A running audit trail of who changed what, when — see src/lib/change-log.ts
+// (the one place that writes to this table) and app/history/page.tsx (the
+// one place that reads it). Deliberately a flat, append-only log of short
+// human-readable summaries rather than a full before/after diff engine —
+// enough to answer "who moved this and when" without needing to reconstruct
+// or replay state. `userName`/`entityLabel` are snapshotted at write time
+// (not just an id) so an entry still reads correctly after the user account
+// or the booking/room/etc. it refers to is later renamed or deleted.
+export const changeLogEntries = pgTable("change_log_entries", {
+  id: serial("id").primaryKey(),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  userId: integer("user_id").references(() => users.id, { onDelete: "set null" }),
+  userName: text("user_name").notNull(),
+  // Which top-level area this change belongs to — drives the /history page's
+  // own filter dropdown. Deliberately coarse (not one category per table).
+  category: text("category", { enum: ["grid", "bookings", "events", "layout"] }).notNull(),
+  // Short verb phrase for the list ("Moved bed", "Created booking", …) plus
+  // a fuller one-line summary with the actual names/dates involved.
+  action: text("action").notNull(),
+  summary: text("summary").notNull(),
+}, (table) => ({
+  createdAtIdx: index("change_log_entries_created_at_idx").on(table.createdAt),
+  categoryIdx: index("change_log_entries_category_idx").on(table.category),
 }));
 
 // ---------------------------------------------------------------------------
@@ -212,8 +294,9 @@ export const events = pgTable("events", {
   notes: text("notes"),
 });
 
-// One free-text note per calendar date, for manual overrides on the Kitchen
-// Prep Matrix (see app/kitchen) — e.g. "extra 2 covers for a walk-in guest"
+// One free-text note per calendar date, for manual overrides on the Meals
+// section of the Daily Sheet (see app/daily-sheet) — e.g. "extra 2 covers
+// for a walk-in guest"
 // that the computed guest/dietary counts can't know about on their own.
 // dietaryAdjustmentCount is a leftover from an earlier, removed meals
 // feature — nothing writes it any more, kept only so `drizzle-kit push`

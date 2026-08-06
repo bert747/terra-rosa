@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import Nav from "@/components/Nav";
+import TooltipHost from "@/components/TooltipHost";
 
 export const metadata: Metadata = {
   title: "Terra Rosa — Room Management",
@@ -13,6 +14,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body>
         <Nav />
         {children}
+        <TooltipHost />
       </body>
     </html>
   );

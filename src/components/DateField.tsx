@@ -123,7 +123,15 @@ export default function DateField({ value, onChange, required, autoFocus, style 
         type="button"
         aria-label="Open calendar"
         onClick={() => setPickerOpen((v) => !v)}
-        style={{ minHeight: "unset", padding: "4px 6px", lineHeight: 1, display: "inline-flex", alignItems: "center" }}
+        // Explicit height (not minHeight) matching the adjacent text
+        // input's own actual RENDERED height (42px, box-sizing: border-box
+        // on both — see globals.css) — padding-based sizing alone doesn't
+        // reliably match a text input's height, since a text field's line
+        // box (from its font metrics) and an icon's own fixed pixel size
+        // don't grow the same way from identical padding. This is also
+        // duplicated in app/daily-sheet/page.tsx's own calendar button —
+        // fix both together if this ever changes.
+        style={{ height: 42, padding: "0 10px", lineHeight: 1, display: "inline-flex", alignItems: "center" }}
       >
         <CalendarIcon />
       </button>
@@ -143,8 +151,10 @@ export default function DateField({ value, onChange, required, autoFocus, style 
 // Plain line-art icon in currentColor — an emoji calendar glyph (📅) renders
 // as a full-colour system icon (red/white) that clashes with the app's flat
 // muted palette everywhere else, so this stays monochrome like the rest of
-// the button chrome.
-function CalendarIcon() {
+// the button chrome. Exported so other bare calendar-icon buttons (e.g. the
+// Daily Sheet's date nav rows) can match this exact icon instead of reaching
+// for the emoji themselves.
+export function CalendarIcon() {
   return (
     <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" aria-hidden="true">
       <rect x="1.5" y="2.5" width="13" height="12" rx="1.5" />
@@ -157,7 +167,7 @@ function CalendarIcon() {
 
 const WEEKDAY_LABELS = ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"];
 
-function CalendarPopover({ value, onPick }: { value: string | null; onPick: (iso: string) => void }) {
+export function CalendarPopover({ value, onPick }: { value: string | null; onPick: (iso: string) => void }) {
   const [monthCursor, setMonthCursor] = useState<{ year: number; month: number }>(() => {
     const base = value ? new Date(`${value}T00:00:00Z`) : new Date();
     return { year: base.getUTCFullYear(), month: base.getUTCMonth() };

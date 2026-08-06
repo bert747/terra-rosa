@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
-import { beds, bedLocations, bookings, joinedBeds } from "@/db/schema";
+import { beds, bedLocations, bookings, joinedBeds, rooms } from "@/db/schema";
 import { requireEditor } from "@/lib/auth";
+import { logChange } from "@/lib/change-log";
 import { and, eq, gt, isNull, inArray, lt, or } from "drizzle-orm";
 
 export const dynamic = "force-dynamic";
@@ -71,17 +72,28 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "End date must be after start date" }, { status: 400 });
   }
 
-  // Joining is a structural bed change like a move or a type change — block
-  // it if a booking on either bed already spans THROUGH startDate (mid-stay,
-  // not just starting there). Split the booking first, then join.
-  const [spanning] = await db
+  // Joining/splitting two Singles is a PHYSICAL bed-type change — the two
+  // mattresses actually get pushed together (or apart), not just an
+  // administrative pairing — so it can only happen on a date when neither
+  // bed already has someone booked into it under the OLD configuration.
+  // This is a full overlap check across the WHOLE requested join range
+  // [startDate, requested end), not just "does something straddle the
+  // start date": a booking that starts later but still within the range
+  // (or starts exactly on startDate) blocks it just as much as one already
+  // mid-stay there — none of those guests are sitting in a bed that's free
+  // to reconfigure. (The separate "Shares Bed With" / auto-join-fallback
+  // flows intentionally join an anchor's own occupied bed with a free
+  // partner — that's a different, guest-driven pairing action with its own
+  // code path that inserts directly into joined_beds, not through here.)
+  const requestedEndForOverlap = endDate ?? FAR_FUTURE;
+  const [blocker] = await db
     .select({ guestName: bookings.guestName, arrivalDate: bookings.arrivalDate, departureDate: bookings.departureDate })
     .from(bookings)
-    .where(and(inArray(bookings.bedId, [bed1Id, bed2Id]), lt(bookings.arrivalDate, startDate), gt(bookings.departureDate, startDate)));
-  if (spanning) {
+    .where(and(inArray(bookings.bedId, [bed1Id, bed2Id]), lt(bookings.arrivalDate, requestedEndForOverlap), gt(bookings.departureDate, startDate)));
+  if (blocker) {
     return NextResponse.json(
       {
-        error: `${spanning.guestName}'s booking (${spanning.arrivalDate} to ${spanning.departureDate}) spans through ${startDate} — split the booking first, then join these beds.`,
+        error: `${blocker.guestName} is booked in one of these beds (${blocker.arrivalDate} to ${blocker.departureDate}) — split or move that booking first, then join these beds.`,
       },
       { status: 400 }
     );
@@ -195,6 +207,13 @@ export async function POST(req: NextRequest) {
         .where(and(eq(bookings.bedId, bed2Id), lt(bookings.arrivalDate, newEndBound), gt(bookings.departureDate, startDate)));
     }
   }
+
+  const [room] = await db.select({ name: rooms.name }).from(rooms).where(eq(rooms.id, room1));
+  await logChange({
+    category: "grid",
+    action: mode === "solo" ? "Joined beds (solo double)" : "Joined beds",
+    summary: `Joined 2 Singles as a ${mode === "solo" ? "Solo Double" : "Couple Double"} in ${room?.name ?? "a room"}, from ${startDate}`,
+  });
 
   return NextResponse.json({ ...join, unassignedBookings, overwrittenJoin }, { status: 201 });
 }

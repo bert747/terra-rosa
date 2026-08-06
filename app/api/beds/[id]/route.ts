@@ -3,6 +3,7 @@ import { and, eq, gt, lt } from "drizzle-orm";
 import { db } from "@/db";
 import { beds, bookings } from "@/db/schema";
 import { requireEditor } from "@/lib/auth";
+import { logChange } from "@/lib/change-log";
 import { isKnownBedType, listBedTypes } from "@/lib/bed-types";
 
 export const dynamic = "force-dynamic";
@@ -49,6 +50,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 
   const [bed] = await db.update(beds).set({ type }).where(eq(beds.id, bedId)).returning();
   if (!bed) return NextResponse.json({ error: "Bed not found" }, { status: 404 });
+  await logChange({ category: "layout", action: "Changed bed type", summary: `Changed bed type to ${type}` });
   return NextResponse.json(bed);
 }
 
@@ -68,5 +70,6 @@ export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ 
 
   const [bed] = await db.delete(beds).where(eq(beds.id, bedId)).returning();
   if (!bed) return NextResponse.json({ error: "Bed not found" }, { status: 404 });
+  await logChange({ category: "layout", action: "Deleted bed", summary: `Deleted a ${bed.type} bed` });
   return NextResponse.json({ ...bed, unassignedBookings });
 }

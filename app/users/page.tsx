@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { MIN_PASSWORD_LENGTH } from "@/lib/users";
+import HelpButton from "@/components/HelpButton";
+import ConfirmModal, { type ConfirmModalState } from "@/components/ConfirmModal";
 
 interface User {
   id: number;
@@ -17,6 +19,7 @@ export default function UsersPage() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [newUser, setNewUser] = useState({ name: "", email: "", password: "", role: "viewer" });
+  const [confirmState, setConfirmState] = useState<ConfirmModalState | null>(null);
 
   async function load() {
     const [u, whoami] = await Promise.all([
@@ -78,20 +81,24 @@ export default function UsersPage() {
     );
   }
 
-  async function removeUser(user: User) {
-    if (
-      !window.confirm(
-        `Delete ${user.email}? Bookings and notes they created stay, but stop showing their name. This cannot be undone.`
-      )
-    ) {
-      return;
-    }
-    await mutate(`/api/users/${user.id}`, { method: "DELETE" }, `Deleted ${user.email}.`);
+  function removeUser(user: User) {
+    setConfirmState({
+      title: "Delete user?",
+      message: `Delete ${user.email}? Bookings and notes they created stay, but stop showing their name. This cannot be undone.`,
+      confirmLabel: "Delete",
+      onConfirm: async () => {
+        await mutate(`/api/users/${user.id}`, { method: "DELETE" }, `Deleted ${user.email}.`);
+      },
+    });
   }
 
   return (
     <div className="tr-shell">
       <h1 style={{ fontSize: 18, marginBottom: 12 }}>Users</h1>
+      <HelpButton title="Using Users">
+        Editors can change everything; viewers can only read. You&apos;ll need to pass the password on to them
+        yourself — it isn&apos;t emailed.
+      </HelpButton>
       {error && <p className="tr-badge tr-badge-warn" style={{ marginBottom: 12 }}>{error}</p>}
       {notice && <p className="tr-badge tr-badge-ok" style={{ marginBottom: 12 }}>{notice}</p>}
 
@@ -139,10 +146,6 @@ export default function UsersPage() {
 
       <div className="tr-card">
         <h2 style={{ fontSize: 15, marginBottom: 8 }}>Add user</h2>
-        <p className="tr-muted" style={{ fontSize: 12, marginBottom: 8 }}>
-          Editors can change everything; viewers can only read. You&apos;ll need to pass the password
-          on to them yourself — it isn&apos;t emailed.
-        </p>
         <form onSubmit={addUser} style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-end" }}>
           <div>
             <label style={{ display: "block", fontSize: 12 }}>Name</label>
@@ -179,6 +182,8 @@ export default function UsersPage() {
           </button>
         </form>
       </div>
+
+      <ConfirmModal state={confirmState} onClose={() => setConfirmState(null)} />
     </div>
   );
 }

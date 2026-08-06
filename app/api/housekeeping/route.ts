@@ -9,6 +9,6 @@ export async function GET(req: NextRequest) {
   if (!isIsoDate(date)) {
     return NextResponse.json({ error: "date (yyyy-mm-dd) query param is required" }, { status: 400 });
   }
-  const rooms = await buildHousekeepingSheet(date);
-  return NextResponse.json({ date, rooms });
+  const sheet = await buildHousekeepingSheet(date);
+  return NextResponse.json({ date, ...sheet });
 }

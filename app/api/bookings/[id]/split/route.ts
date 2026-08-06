@@ -33,9 +33,16 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     return NextResponse.json({ error: "Split date must be strictly between arrival and departure" }, { status: 400 });
   }
 
+  // The root of this booking's split lineage — itself, if this is the
+  // first time it's ever been split, or whatever root it already belongs
+  // to if it's already a piece of an earlier split. Both pieces end up
+  // sharing this same value, which is what lets every sibling be found
+  // later with one `WHERE split_group_id = X` query.
+  const splitGroupId = booking.splitGroupId ?? booking.id;
+
   const [updated] = await db
     .update(bookings)
-    .set({ departureDate: splitDate })
+    .set({ departureDate: splitDate, splitGroupId })
     .where(eq(bookings.id, bookingId))
     .returning();
 
@@ -43,11 +50,16 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     .insert(bookings)
     .values({
       guestName: booking.guestName,
+      firstName: booking.firstName,
+      lastName: booking.lastName,
+      preferredName: booking.preferredName,
+      notes: booking.notes,
       arrivalDate: splitDate,
       departureDate: booking.departureDate,
       linkedBookingId: booking.linkedBookingId,
       bedId: booking.bedId,
       dietariesTags: booking.dietariesTags,
+      splitGroupId,
     })
     .returning();
 

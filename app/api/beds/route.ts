@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
 import { beds, bedLocations, floors, rooms } from "@/db/schema";
 import { requireEditor } from "@/lib/auth";
+import { logChange } from "@/lib/change-log";
 import { eq, isNull } from "drizzle-orm";
 import { isKnownBedType, listBedTypes } from "@/lib/bed-types";
 
@@ -51,5 +52,6 @@ export async function POST(req: NextRequest) {
   }
 
   const [bed] = await db.insert(beds).values({ type }).returning();
+  await logChange({ category: "layout", action: "Created bed", summary: `Created a new ${type} bed` });
   return NextResponse.json(bed, { status: 201 });
 }

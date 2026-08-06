@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
 import { events } from "@/db/schema";
 import { requireEditor } from "@/lib/auth";
+import { logChange } from "@/lib/change-log";
 import { asc } from "drizzle-orm";
 
 export const dynamic = "force-dynamic";
@@ -35,5 +36,6 @@ export async function POST(req: NextRequest) {
     );
   }
   const [row] = await db.insert(events).values({ name, startDate, endDate, notes }).returning();
+  await logChange({ category: "events", action: "Created event", summary: `Created event "${name}", ${startDate} to ${endDate}` });
   return NextResponse.json(row, { status: 201 });
 }

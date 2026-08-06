@@ -40,6 +40,15 @@ export async function nextTimelineEventDate(bedIds: number[], afterDate: ISODate
   }
   for (const rows of [locationRows, joinRows, soloRows]) {
     for (const r of rows) {
+      // A row whose endDate isn't strictly after its startDate was never
+      // actually active for any date — a stale/corrupt leftover, not a
+      // real future event. Counting its startDate here (the only failure
+      // mode that actually surfaced) has produced end-before-start joins:
+      // a brand-new join truncated to some unrelated garbage row's own
+      // startDate instead of running to whichever bed genuinely has
+      // something else scheduled next. Same defensive filter
+      // findPlannedJoinChangeLines already applies for the same reason.
+      if (r.endDate != null && r.endDate <= r.startDate) continue;
       candidates.push(r.startDate);
       if (r.endDate) candidates.push(r.endDate);
     }

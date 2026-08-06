@@ -15,12 +15,27 @@ import {
 import { eventsInRange, layoutEventLanes, type EventBand } from "@/lib/event-lanes";
 import { addDays, type ISODate } from "@/lib/occupancy";
 import { loadBedCapacities } from "@/lib/bed-types";
+import { findAllocationIssues } from "@/lib/allocation-issues";
+import { findPlannedChanges, type PlannedChangeLine } from "@/lib/bed-moves";
+import { loadAllSplitGroups, type SplitSiblingBooking } from "@/lib/split-siblings";
 
 export interface UnassignedAlert {
   id: number;
   guestName: string;
   arrivalDate: ISODate;
   departureDate: ISODate;
+}
+
+export interface IssueAlert {
+  id: number;
+  guestName: string;
+  issues: { otherBookingId: number; otherGuestName: string; kind: "room" | "bed" }[];
+}
+
+export interface IssueGroup {
+  /** Any one member's booking id — enough to resolve the whole group again server-side (see /api/bookings/[id]/allocation-fix-options). */
+  bookingId: number;
+  guestNames: string[];
 }
 
 export interface GridData {
@@ -34,6 +49,12 @@ export interface GridData {
   occupiedByDate: number[];
   totalByDate: number[];
   alerts: UnassignedAlert[];
+  issues: IssueAlert[];
+  issueGroups: IssueGroup[];
+  /** Every future bed move or bed-type/join change already scheduled — see the grid's "Planned Changes" button. Not scoped to the viewed window; it's a global, always-current list. */
+  plannedChanges: PlannedChangeLine[];
+  /** Every split-booking lineage in the system, keyed by splitGroupId (as a string — see the object-vs-Map note near where this is built) — not scoped to the viewed window, since a sibling can be anywhere on the calendar. Powers the grid pill's "jump to the other part" arrows. */
+  splitGroups: Record<string, SplitSiblingBooking[]>;
   /** Target room id for the grid's "Send to Dorm Storage" bed action. */
   dormStorageRoomId: number;
 }
@@ -70,8 +91,9 @@ export async function loadGridData(start: ISODate, days: number): Promise<GridDa
   const dates = Array.from({ length: days }, (_, i) => addDays(start, i));
   const lastDate = dates[dates.length - 1];
   const windowEnd = addDays(start, days); // exclusive
+  const today = new Date().toISOString().slice(0, 10);
 
-  const [dormStorageRoomId, floorRows, roomRows, allBeds, locationRows, joinRows, soloRows, eventList, capacities] = await Promise.all([
+  const [dormStorageRoomId, floorRows, roomRows, allBeds, locationRows, joinRows, soloRows, eventList, capacities, allocationIssues, plannedChanges, splitGroupsMap] = await Promise.all([
     ensureDormStorageRoomId(),
     db.select().from(floors),
     db.select().from(rooms),
@@ -105,7 +127,11 @@ export async function loadGridData(start: ISODate, days: number): Promise<GridDa
       .where(and(lt(bedSoloPeriods.startDate, windowEnd), or(isNull(bedSoloPeriods.endDate), gt(bedSoloPeriods.endDate, start)))),
     eventsInRange(start, lastDate),
     loadBedCapacities(),
+    findAllocationIssues(),
+    findPlannedChanges(),
+    loadAllSplitGroups(),
   ]);
+  const splitGroups: Record<string, SplitSiblingBooking[]> = Object.fromEntries(splitGroupsMap);
 
   const floorNameById = new Map(floorRows.map((f) => [f.id, f.name]));
   const roomsForGrid = roomRows
@@ -132,18 +158,43 @@ export async function loadGridData(start: ISODate, days: number): Promise<GridDa
     .select({
       id: bookings.id,
       guestName: bookings.guestName,
+      firstName: bookings.firstName,
+      preferredName: bookings.preferredName,
+      notes: bookings.notes,
       arrivalDate: bookings.arrivalDate,
       departureDate: bookings.departureDate,
       bedId: bookings.bedId,
+      splitGroupId: bookings.splitGroupId,
+      linkedBookingId: bookings.linkedBookingId,
+      sharesBedWithBookingId: bookings.sharesBedWithBookingId,
     })
     .from(bookings)
     .where(and(lt(bookings.arrivalDate, windowEnd), gt(bookings.departureDate, start)));
 
+  // A "Sleeps near"/"Shares bed with" partner can fall outside the current
+  // window (already checked out, or arriving later than what's loaded) —
+  // a lightweight all-bookings id->name lookup so the pill annotation
+  // still resolves the partner's CURRENT name even then, rather than only
+  // working when both halves happen to be in view at once.
+  const allGuestNames = await db.select({ id: bookings.id, guestName: bookings.guestName }).from(bookings);
+  const guestNameById = new Map(allGuestNames.map((b) => [b.id, b.guestName]));
+  function relationshipFor(b: (typeof bookingRows)[number]): { kind: "room" | "bed"; otherGuestName: string } | undefined {
+    if (b.sharesBedWithBookingId != null) {
+      const otherGuestName = guestNameById.get(b.sharesBedWithBookingId);
+      if (otherGuestName) return { kind: "bed", otherGuestName };
+    }
+    if (b.linkedBookingId != null) {
+      const otherGuestName = guestNameById.get(b.linkedBookingId);
+      if (otherGuestName) return { kind: "room", otherGuestName };
+    }
+    return undefined;
+  }
+
   const gridBookings: GridBooking[] = bookingRows
     .filter((b): b is typeof b & { bedId: number } => b.bedId != null)
-    .map((b) => ({ ...b }));
+    .map((b) => ({ ...b, allocationIssues: allocationIssues.get(b.id) ?? [], relationship: relationshipFor(b) }));
 
-  const grid = buildRoomGrid(dates, roomsForGrid, gridBedInfos, gridLocationSegments, gridJoinSegments, gridSoloSegments, gridBookings, capacities);
+  const grid = buildRoomGrid(dates, roomsForGrid, gridBedInfos, gridLocationSegments, gridJoinSegments, gridSoloSegments, gridBookings, capacities, today);
   const { occupied: occupiedByDate, total: totalByDate } = capacityByDate(dates, grid);
   const eventLanes = layoutEventLanes(dates, eventList);
 
@@ -162,5 +213,44 @@ export async function loadGridData(start: ISODate, days: number): Promise<GridDa
     }
   }
 
-  return { start, days, dates, grid, eventLanes, arrByDate, depByDate, occupiedByDate, totalByDate, alerts, dormStorageRoomId };
+  const issues: IssueAlert[] = bookingRows
+    .filter((b) => (allocationIssues.get(b.id) ?? []).length > 0)
+    .map((b) => ({ id: b.id, guestName: b.guestName, issues: allocationIssues.get(b.id)! }));
+
+  // Every issue is flagged on BOTH bookings it involves (see
+  // findAllocationIssues), so the issues list alone already contains every
+  // edge needed to reconstruct connected groups — no extra query. Three
+  // people all missing the same requirement reads as one line, not three.
+  const issueGroups: IssueGroup[] = (() => {
+    const guestNameById = new Map(issues.map((i) => [i.id, i.guestName]));
+    const adjacency = new Map<number, Set<number>>();
+    for (const i of issues) {
+      for (const rel of i.issues) {
+        if (!adjacency.has(i.id)) adjacency.set(i.id, new Set());
+        adjacency.get(i.id)!.add(rel.otherBookingId);
+      }
+    }
+    const visited = new Set<number>();
+    const groups: IssueGroup[] = [];
+    for (const i of issues) {
+      if (visited.has(i.id)) continue;
+      const stack = [i.id];
+      const memberIds: number[] = [];
+      visited.add(i.id);
+      while (stack.length > 0) {
+        const cur = stack.pop()!;
+        memberIds.push(cur);
+        for (const next of adjacency.get(cur) ?? []) {
+          if (!visited.has(next)) {
+            visited.add(next);
+            stack.push(next);
+          }
+        }
+      }
+      groups.push({ bookingId: memberIds[0], guestNames: memberIds.map((id) => guestNameById.get(id) ?? "?") });
+    }
+    return groups;
+  })();
+
+  return { start, days, dates, grid, eventLanes, arrByDate, depByDate, occupiedByDate, totalByDate, alerts, issues, issueGroups, plannedChanges, splitGroups, dormStorageRoomId };
 }

@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
+import ContextMenu, { type ContextMenuItem, type ContextMenuState } from "@/components/ContextMenu";
 
 export interface BookingRow {
   id: number;
@@ -9,65 +10,115 @@ export interface BookingRow {
   arrivalDate: string;
   departureDate: string;
   stayLength: string;
-  sleepsNear: string;
+  sharesWith: string;
   bedType: string;
   guestType: string;
   dietary: string;
 }
 
-interface Column {
+export interface Column {
   key: keyof Omit<BookingRow, "id">;
   label: string;
 }
 
-const DEFAULT_COLUMNS: Column[] = [
+export const DEFAULT_COLUMNS: Column[] = [
   { key: "guestName", label: "Guest" },
   { key: "roomName", label: "Room" },
   { key: "arrivalDate", label: "Arrival" },
   { key: "departureDate", label: "Departure" },
   { key: "stayLength", label: "Nights" },
-  { key: "sleepsNear", label: "Sleeps near" },
+  { key: "sharesWith", label: "Shares with" },
   { key: "bedType", label: "Bed Type" },
   { key: "guestType", label: "Guest Type" },
   { key: "dietary", label: "Dietary" },
 ];
 
-const STORAGE_KEY = "tr-bookings-column-order";
+export const DEFAULT_COLUMN_WIDTHS: Record<string, number> = {
+  guestName: 160,
+  roomName: 130,
+  arrivalDate: 100,
+  departureDate: 100,
+  stayLength: 70,
+  sharesWith: 220,
+  bedType: 130,
+  guestType: 110,
+  dietary: 200,
+};
 
-function loadColumnOrder(): Column[] {
-  if (typeof window === "undefined") return DEFAULT_COLUMNS;
-  try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (!raw) return DEFAULT_COLUMNS;
-    const keys: string[] = JSON.parse(raw);
-    const byKey = new Map(DEFAULT_COLUMNS.map((c) => [c.key, c]));
-    const restored = keys.map((k) => byKey.get(k as Column["key"])).filter((c): c is Column => c != null);
-    // If storage is stale (a column was added/removed since it was saved),
-    // fall back to the default order rather than showing a partial table.
-    if (restored.length !== DEFAULT_COLUMNS.length) return DEFAULT_COLUMNS;
-    return restored;
-  } catch {
-    return DEFAULT_COLUMNS;
+const MIN_COLUMN_WIDTH = 50;
+
+let measureCtx: CanvasRenderingContext2D | null = null;
+function measureTextWidth(text: string, font: string): number {
+  if (typeof document === "undefined") return text.length * 7;
+  if (!measureCtx) {
+    const canvas = document.createElement("canvas");
+    measureCtx = canvas.getContext("2d");
   }
+  if (!measureCtx) return text.length * 7;
+  measureCtx.font = font;
+  return measureCtx.measureText(text).width;
 }
 
 /**
- * Bookings table with drag-and-drop column reordering. No drag library in
- * this repo (see GridCanvas.tsx's hand-rolled Pointer Events for the same
- * reason) — this uses plain HTML5 drag events on the <th> cells instead,
- * since a header-only reorder doesn't need pointer-capture/ghost-element
- * tricks. Column order persists to localStorage so it survives a reload.
+ * Widest cell (header label or any row's value) in this column, plus padding
+ * for the drag handle/sort icon in the header — used for double-click
+ * autofit. Deliberately only measures the rows this particular table
+ * instance has (upcoming vs. later), since that's what's actually visible.
  */
-export default function BookingsTable({ rows }: { rows: BookingRow[] }) {
-  const [columns, setColumns] = useState<Column[]>(DEFAULT_COLUMNS);
+function autofitWidth(col: Column, rows: BookingRow[]): number {
+  const headerWidth = measureTextWidth(col.label, "600 13px system-ui, sans-serif") + 50; // grip + sort icon + gaps
+  let maxCellWidth = 0;
+  for (const row of rows) {
+    const w = measureTextWidth(String(row[col.key]), "13px system-ui, sans-serif");
+    if (w > maxCellWidth) maxCellWidth = w;
+  }
+  return Math.max(MIN_COLUMN_WIDTH, Math.round(Math.max(headerWidth, maxCellWidth + 24)));
+}
+
+interface BookingsTableProps {
+  rows: BookingRow[];
+  columns: Column[];
+  hiddenKeys: Set<string>;
+  columnWidths: Record<string, number>;
+  onReorderColumns: (next: Column[]) => void;
+  onResizeColumn: (key: string, width: number) => void;
+  onToggleVisible: (key: string) => void;
+  onDeleteRow: (row: BookingRow) => void;
+}
+
+/**
+ * Bookings table with drag-and-drop column reordering and drag-to-resize /
+ * double-click-to-autofit column widths. No drag library in this repo (see
+ * GridCanvas.tsx's hand-rolled Pointer Events for the same reason) — reorder
+ * uses plain HTML5 drag events, resize uses Pointer Events directly since it
+ * needs continuous movement, not a single drop target.
+ *
+ * Column order/visibility/widths are all owned by the parent (see
+ * BookingsSections) so multiple table instances on one page share a single
+ * "Columns" control instead of each carrying its own.
+ */
+export default function BookingsTable({
+  rows,
+  columns,
+  hiddenKeys,
+  columnWidths,
+  onReorderColumns,
+  onResizeColumn,
+  onToggleVisible,
+  onDeleteRow,
+}: BookingsTableProps) {
   const [dragKey, setDragKey] = useState<string | null>(null);
   const [dragOverKey, setDragOverKey] = useState<string | null>(null);
   const [sortKey, setSortKey] = useState<Column["key"] | null>(null);
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
+  const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
+  const resizeRef = useRef<{ key: string; startX: number; startWidth: number } | null>(null);
 
-  useEffect(() => {
-    setColumns(loadColumnOrder());
-  }, []);
+  const visibleColumns = useMemo(() => columns.filter((c) => !hiddenKeys.has(c.key)), [columns, hiddenKeys]);
+  const tableWidth = useMemo(
+    () => visibleColumns.reduce((sum, c) => sum + (columnWidths[c.key] ?? DEFAULT_COLUMN_WIDTHS[c.key] ?? 120), 0),
+    [visibleColumns, columnWidths]
+  );
 
   // Three-state cycle per column: unsorted -> asc -> desc -> unsorted.
   // Clicking a different column always restarts that cycle at asc.
@@ -93,14 +144,26 @@ export default function BookingsTable({ rows }: { rows: BookingRow[] }) {
     return sorted;
   }, [rows, sortKey, sortDir]);
 
-  function persist(next: Column[]) {
-    setColumns(next);
-    try {
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next.map((c) => c.key)));
-    } catch {
-      // Storage unavailable (private browsing etc.) — reorder still works
-      // for this session, it just won't persist.
+  function openColumnMenu(e: React.MouseEvent, col: Column) {
+    e.preventDefault();
+    const items: ContextMenuItem[] = [
+      { label: "Sort A → Z", onClick: () => { setSortKey(col.key); setSortDir("asc"); } },
+      { label: "Sort Z → A", onClick: () => { setSortKey(col.key); setSortDir("desc"); } },
+    ];
+    if (col.key !== "guestName") {
+      items.push({ label: "Hide column", onClick: () => onToggleVisible(col.key) });
     }
+    setContextMenu({ x: e.clientX, y: e.clientY, title: col.label, items });
+  }
+
+  function openRowMenu(e: React.MouseEvent, row: BookingRow) {
+    e.preventDefault();
+    setContextMenu({
+      x: e.clientX,
+      y: e.clientY,
+      title: row.guestName,
+      items: [{ label: "Delete booking", danger: true, onClick: () => onDeleteRow(row) }],
+    });
   }
 
   function handleDrop(targetKey: string) {
@@ -112,91 +175,136 @@ export default function BookingsTable({ rows }: { rows: BookingRow[] }) {
     if (fromIndex === -1 || toIndex === -1) return;
     const [moved] = next.splice(fromIndex, 1);
     next.splice(toIndex, 0, moved);
-    persist(next);
+    onReorderColumns(next);
     setDragKey(null);
+  }
+
+  function startResize(e: React.PointerEvent, col: Column) {
+    e.preventDefault();
+    e.stopPropagation();
+    const startWidth = columnWidths[col.key] ?? DEFAULT_COLUMN_WIDTHS[col.key] ?? 120;
+    resizeRef.current = { key: col.key, startX: e.clientX, startWidth };
+    (e.target as HTMLElement).setPointerCapture(e.pointerId);
+  }
+
+  function handleResizeMove(e: React.PointerEvent) {
+    const state = resizeRef.current;
+    if (!state) return;
+    const next = Math.max(MIN_COLUMN_WIDTH, Math.round(state.startWidth + (e.clientX - state.startX)));
+    onResizeColumn(state.key, next);
+  }
+
+  function endResize(e: React.PointerEvent) {
+    if (!resizeRef.current) return;
+    (e.target as HTMLElement).releasePointerCapture(e.pointerId);
+    resizeRef.current = null;
   }
 
   return (
     <div className="tr-card" style={{ overflowX: "auto" }}>
-      <table>
+      <table style={{ tableLayout: "fixed", width: tableWidth, minWidth: "100%" }}>
         <thead>
           <tr>
-            {columns.map((col) => (
-              <th
-                key={col.key}
-                draggable
-                onDragStart={(e) => {
-                  // Firefox refuses to start a drag at all unless data is
-                  // set here — Chrome/Safari don't strictly need it, but
-                  // setting it keeps this working across all three.
-                  e.dataTransfer?.setData("text/plain", col.key);
-                  if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
-                  setDragKey(col.key);
-                }}
-                onDragOver={(e) => {
-                  e.preventDefault();
-                  if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
-                  if (dragOverKey !== col.key) setDragOverKey(col.key);
-                }}
-                onDragLeave={() => setDragOverKey((k) => (k === col.key ? null : k))}
-                onDrop={(e) => {
-                  e.preventDefault();
-                  handleDrop(col.key);
-                }}
-                onDragEnd={() => {
-                  setDragKey(null);
-                  setDragOverKey(null);
-                }}
-                style={{
-                  cursor: "grab",
-                  userSelect: "none",
-                  opacity: dragKey === col.key ? 0.4 : 1,
-                  background: dragOverKey === col.key && dragKey !== col.key ? "var(--tr-accent-soft)" : undefined,
-                  boxShadow: dragOverKey === col.key && dragKey !== col.key ? "inset 2px 0 0 var(--tr-accent)" : undefined,
-                  width: col.key === "stayLength" ? 1 : undefined,
-                  whiteSpace: col.key === "stayLength" ? "nowrap" : undefined,
-                }}
-                title="Drag to reorder columns"
-              >
-                <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
-                  <span aria-hidden="true" style={{ opacity: 0.45, fontSize: 11, letterSpacing: "-1px" }}>⠿</span>
-                  {col.label}
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      // Sorting is a click, not a drag — stop it from also
-                      // being read as the start of a column-reorder drag.
+            {visibleColumns.map((col) => {
+              const width = columnWidths[col.key] ?? DEFAULT_COLUMN_WIDTHS[col.key] ?? 120;
+              return (
+                <th
+                  key={col.key}
+                  draggable
+                  onDragStart={(e) => {
+                    // Firefox refuses to start a drag at all unless data is
+                    // set here — Chrome/Safari don't strictly need it, but
+                    // setting it keeps this working across all three.
+                    e.dataTransfer?.setData("text/plain", col.key);
+                    if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
+                    setDragKey(col.key);
+                  }}
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+                    if (dragOverKey !== col.key) setDragOverKey(col.key);
+                  }}
+                  onDragLeave={() => setDragOverKey((k) => (k === col.key ? null : k))}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    handleDrop(col.key);
+                  }}
+                  onDragEnd={() => {
+                    setDragKey(null);
+                    setDragOverKey(null);
+                  }}
+                  onContextMenu={(e) => openColumnMenu(e, col)}
+                  style={{
+                    position: "relative",
+                    cursor: "grab",
+                    userSelect: "none",
+                    width,
+                    opacity: dragKey === col.key ? 0.4 : 1,
+                    background: dragOverKey === col.key && dragKey !== col.key ? "var(--tr-accent-soft)" : undefined,
+                    boxShadow: dragOverKey === col.key && dragKey !== col.key ? "inset 2px 0 0 var(--tr-accent)" : undefined,
+                  }}
+                  data-tooltip="Drag to reorder — right-click to sort or hide — drag the right edge to resize"
+                >
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: 5, maxWidth: "100%", overflow: "hidden" }}>
+                    <span aria-hidden="true" style={{ opacity: 0.45, fontSize: 11, letterSpacing: "-1px" }}>⠿</span>
+                    <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{col.label}</span>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        // Sorting is a click, not a drag — stop it from also
+                        // being read as the start of a column-reorder drag.
+                        e.stopPropagation();
+                        toggleSort(col.key);
+                      }}
+                      aria-label={`Sort by ${col.label}`}
+                      data-tooltip={`Sort by ${col.label}`}
+                      style={{
+                        background: "none",
+                        border: "none",
+                        padding: 0,
+                        margin: 0,
+                        cursor: "pointer",
+                        fontSize: 10,
+                        lineHeight: 1,
+                        opacity: sortKey === col.key ? 1 : 0.35,
+                        flexShrink: 0,
+                      }}
+                    >
+                      {sortKey === col.key ? (sortDir === "asc" ? "▲" : "▼") : "▲▼"}
+                    </button>
+                  </span>
+                  <span
+                    onPointerDown={(e) => startResize(e, col)}
+                    onPointerMove={handleResizeMove}
+                    onPointerUp={endResize}
+                    onDoubleClick={(e) => {
                       e.stopPropagation();
-                      toggleSort(col.key);
+                      onResizeColumn(col.key, autofitWidth(col, rows));
                     }}
-                    aria-label={`Sort by ${col.label}`}
-                    title={`Sort by ${col.label}`}
+                    data-tooltip="Drag to resize — double-click to fit content"
                     style={{
-                      background: "none",
-                      border: "none",
-                      padding: 0,
-                      margin: 0,
-                      cursor: "pointer",
-                      fontSize: 10,
-                      lineHeight: 1,
-                      opacity: sortKey === col.key ? 1 : 0.35,
+                      position: "absolute",
+                      top: 0,
+                      right: 0,
+                      bottom: 0,
+                      width: 8,
+                      cursor: "col-resize",
+                      touchAction: "none",
                     }}
-                  >
-                    {sortKey === col.key ? (sortDir === "asc" ? "▲" : "▼") : "▲▼"}
-                  </button>
-                </span>
-              </th>
-            ))}
+                  />
+                </th>
+              );
+            })}
           </tr>
         </thead>
         <tbody>
           {sortedRows.map((row) => (
-            <tr key={row.id} className="tr-row-link">
-              {columns.map((col) => (
+            <tr key={row.id} className="tr-row-link" onContextMenu={(e) => openRowMenu(e, row)}>
+              {visibleColumns.map((col) => (
                 <td
                   key={col.key}
-                  title={col.key === "dietary" ? row.dietary : undefined}
-                  style={col.key === "stayLength" ? { width: 1, whiteSpace: "nowrap", textAlign: "center" } : undefined}
+                  data-tooltip={col.key === "dietary" ? row.dietary : undefined}
+                  style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
                 >
                   <a className="tr-cell-link" href={`/bookings/${row.id}`}>
                     {row[col.key]}
@@ -207,6 +315,7 @@ export default function BookingsTable({ rows }: { rows: BookingRow[] }) {
           ))}
         </tbody>
       </table>
+      <ContextMenu state={contextMenu} onClose={() => setContextMenu(null)} />
     </div>
   );
 }

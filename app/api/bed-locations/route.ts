@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
-import { bedLocations, bookings } from "@/db/schema";
+import { bedLocations, bookings, beds, rooms } from "@/db/schema";
 import { requireEditor } from "@/lib/auth";
+import { logChange } from "@/lib/change-log";
 import { and, eq, gt, isNull, lt, or } from "drizzle-orm";
 
 export const dynamic = "force-dynamic";
@@ -76,6 +77,14 @@ export async function POST(req: NextRequest) {
     .insert(bedLocations)
     .values({ bedId, roomId, startDate, endDate })
     .returning();
+
+  const [bed] = await db.select({ type: beds.type }).from(beds).where(eq(beds.id, bedId));
+  const [room] = await db.select({ name: rooms.name }).from(rooms).where(eq(rooms.id, roomId));
+  await logChange({
+    category: "grid",
+    action: "Moved bed",
+    summary: `Moved ${bed?.type ?? "a bed"} to ${room?.name ?? "a room"}, from ${startDate}`,
+  });
 
   return NextResponse.json(location, { status: 201 });
 }

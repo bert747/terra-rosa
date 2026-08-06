@@ -1,23 +1,36 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { formatDateUk, nightsBetween } from "@/lib/dates";
+import { formatDateUk, isIsoDate, nightsBetween } from "@/lib/dates";
 import { eventColourStyle, roomColourStyle } from "@/lib/room-colours";
 import type { GridData } from "@/lib/grid-data";
+import type { PlannedChangeLine } from "@/lib/bed-moves";
+import type { SplitSiblingBooking } from "@/lib/split-siblings";
 import { addDays, type ISODate } from "@/lib/occupancy";
 import ToastStack, { type ToastMessage } from "@/components/ToastStack";
 import ContextMenu, { type ContextMenuItem, type ContextMenuState } from "@/components/ContextMenu";
 import BedActionModal, { type BedActionModalState } from "@/components/BedActionModal";
 import JoinActionModal, { type JoinActionModalState } from "@/components/JoinActionModal";
 import JoinConflictModal, { type JoinConflictModalState } from "@/components/JoinConflictModal";
+import SplitMergeConflictModal, { type SplitMergeConflictModalState } from "@/components/SplitMergeConflictModal";
+import PlannedChangeConflictModal, { type PlannedChangeConflictModalState } from "@/components/PlannedChangeConflictModal";
 import ConfirmModal, { type ConfirmModalState } from "@/components/ConfirmModal";
-import DateField from "@/components/DateField";
+import { CalendarIcon, CalendarPopover } from "@/components/DateField";
+import HelpButton from "@/components/HelpButton";
+import type { GroupMoveProposal } from "@/lib/group-move";
+import type { RoomFixOption } from "@/lib/allocation-fixes";
 
 const COLUMN_WIDTH = 64;
 const ROOM_COL_WIDTH = 140;
 const BED_COL_WIDTH = 110;
+// Sticky-positioning math for the frozen Events row(s) — see the
+// tr-grid-event-lane rows below. Matches the header row's own `height: 32px`
+// (see .tr-grid th, .tr-grid td) plus its 1px bottom border, and each event
+// lane's own shorter `height: 26px` (see .tr-grid-event-lane > td).
+const HEADER_ROW_HEIGHT = 33;
+const GRID_ROW_HEIGHT = 26;
 const YEARS_BACK = 2;
 const YEARS_FORWARD = 2;
 // The loaded window stays a fixed ~60 days wide the whole time — as the
@@ -27,6 +40,22 @@ const YEARS_FORWARD = 2;
 const ROLLING_WINDOW_DAYS = 60;
 const EDGE_BUFFER_DAYS = 20;
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+// Plain line-art icon in currentColor, matching CalendarIcon's own style
+// (see DateField.tsx) — the ⚙ glyph it replaces rendered as a thin, tiny
+// character at normal button font sizes with no clean way to make it read
+// as a deliberate icon rather than stray punctuation.
+function GearIcon({ size = 16 }: { size?: number }) {
+  // A real gear silhouette (rounded teeth around a ring, hollow centre) —
+  // the previous hand-rolled version (a small circle with thin radiating
+  // lines) read as a brightness/sun icon instead of a settings cog.
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <circle cx="12" cy="12" r="3" />
+      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82A1.65 1.65 0 0 0 3 14H2.91A2 2 0 0 1 1 12a2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
+    </svg>
+  );
+}
 
 function dayOfWeek(date: ISODate): number {
   return new Date(`${date}T00:00:00Z`).getUTCDay();
@@ -39,6 +68,107 @@ function weekday(date: ISODate): string {
 function isWeekend(date: ISODate): boolean {
   const day = dayOfWeek(date);
   return day === 0 || day === 6;
+}
+
+/**
+ * "Join **2 single beds** as a **couple double** in **Sea 1**" / "from
+ * **05/08/2026**" — see the Planned Changes panel. Active voice throughout
+ * (an instruction the panel is about to carry out, not a passive
+ * description of something happening on its own) so it reads as what the
+ * button DOES, with the key nouns bolded so the sentence scans instead of
+ * reading as one flat run of text. Deliberately rendered as two explicit
+ * lines — the WHAT, then the WHEN — rather than left to wrap organically:
+ * a plain single-line string wraps wherever the panel's fixed width
+ * happens to force a break, which is rarely a sensible spot once room/
+ * guest names vary in length; splitting right here guarantees the break
+ * always lands after the change itself, never mid-phrase.
+ */
+function plannedChangeLineText(m: PlannedChangeLine): React.ReactNode {
+  // A join always involves exactly 2 physical beds per formation — m.count
+  // counts separate simultaneous formations, not beds, so the bed count
+  // shown here is always double it.
+  const bedCount = m.kind === "move" ? m.count : m.count * 2;
+  const label = bedCount === 1 ? m.bedType : `${m.bedType}s`;
+  const couple = m.count === 1 ? "Couple Double" : `${m.count} Couple Doubles`;
+  const when = (
+    <>
+      from <strong>{formatDateUk(m.startDate)}</strong>
+      {m.endDate && (
+        <>
+          {" "}
+          until <strong>{formatDateUk(m.endDate)}</strong>
+        </>
+      )}
+    </>
+  );
+
+  let what: React.ReactNode;
+  if (m.kind === "move") {
+    what = (
+      <>
+        Move <strong>{bedCount} {label}</strong> from <strong>{m.fromRoomName}</strong> to <strong>{m.toRoomName}</strong>
+      </>
+    );
+  } else if (m.kind === "join-start") {
+    what = (
+      <>
+        Join <strong>{bedCount} {label}</strong> as a <strong>{couple}</strong> in <strong>{m.toRoomName}</strong>
+      </>
+    );
+  } else {
+    what = (
+      <>
+        Split the <strong>{couple}</strong> in <strong>{m.toRoomName}</strong> back into <strong>{bedCount} {label}</strong>
+      </>
+    );
+  }
+
+  return (
+    <>
+      <div>{what}</div>
+      <div className="tr-muted" style={{ fontSize: 12 }}>{when}</div>
+    </>
+  );
+}
+
+/**
+ * What an affected booking is CURRENTLY sitting in, for
+ * PlannedChangeConflictModal's wording — the setup "Cancel" would leave
+ * them in, as opposed to whatever the (blocked) change was about to make
+ * it. Only meaningful for a single line at a time (the common case — one
+ * "Delete" click); a batch "Delete all" spanning several different lines
+ * falls back to a plain, still-accurate description rather than guessing
+ * at a single bed type that wouldn't apply to all of them.
+ */
+function plannedChangeConfigDescription(lines: PlannedChangeLine[]): string {
+  if (lines.length !== 1) return "their current beds";
+  const l = lines[0];
+  if (l.kind === "move") return `the ${l.bedType}`;
+  if (l.kind === "join-start") return `${l.bedType} beds`;
+  return "the Couple Double";
+}
+
+/**
+ * What a booking's pill actually shows: its own preferredName if staff set
+ * one (a short/preferred form — see the schema column's own doc comment),
+ * else just the first word of guestName. guestName itself is untouched
+ * everywhere else (bookings list, exports, the daily sheet, the title
+ * tooltip on this very pill) — this is purely about fitting a name into a
+ * pill that's often narrower than someone's full name.
+ */
+function pillDisplayName(booking: GridBooking): string {
+  return booking.preferredName || booking.firstName;
+}
+
+// Bed-type names (e.g. the stored "1.5-bed") get Title Cased with dashes
+// turned into spaces when used inside a composite mode label like "Switch to
+// Couple 1.5 Bed" — plain bed-type references elsewhere stay exactly as
+// configured (e.g. "Single"), this is only for the compound names.
+function formatBedTypeLabel(type: string): string {
+  return type
+    .split("-")
+    .map((word) => (word.length === 0 ? word : word[0].toUpperCase() + word.slice(1)))
+    .join(" ");
 }
 
 // Weekend shading renders as one continuous "wallpaper" tiled across the
@@ -159,6 +289,26 @@ function conflictingBookings(
   return [...conflicts.values()];
 }
 
+/**
+ * Every OTHER Single, not-already-joined bed in `room`, for a "Join as
+ * Couple/Solo Double" partner picker — never assume the array-adjacent bed
+ * is the one staff actually meant (see JoinActionModal's own doc comment):
+ * a room with a pre-existing occupied Single and two newly moved-in free
+ * ones sorts by bedId, not by which pair makes sense, so the default offered
+ * partner can easily be the occupied one. Labelled with each bed's own
+ * occupancy on `dataIndex` so the picker itself makes the difference obvious
+ * without staff needing to know bed ids.
+ */
+function singleUnitPartnerOptions(room: RoomGridRow, excludeBedId: number, dataIndex: number | null): { bedId: number; label: string; occupied: boolean }[] {
+  return room.units
+    .filter((u) => u.bedId !== excludeBedId && u.slots.length === 1 && u.partnerUnitKey == null && u.label.toLowerCase() === "single")
+    .map((u) => {
+      const cell = dataIndex != null ? u.slots[0].cells[dataIndex] : null;
+      const occupant = cell?.state === "booked" ? cell.booking?.guestName : null;
+      return { bedId: u.bedId, label: occupant ? `Single — occupied by ${occupant}` : "Single — free", occupied: occupant != null };
+    });
+}
+
 export default function GridCanvas({ initialData, today }: { initialData: GridData; today: ISODate }) {
   const router = useRouter();
   const epochStart = useMemo(() => addDays(today, -365 * YEARS_BACK), [today]);
@@ -168,9 +318,80 @@ export default function GridCanvas({ initialData, today }: { initialData: GridDa
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [jumpValue, setJumpValue] = useState(today);
+  const [jumpPickerOpen, setJumpPickerOpen] = useState(false);
   const fetchTokenRef = useRef(0);
 
   const viewportRef = useRef<HTMLDivElement | null>(null);
+
+  // Room/Bed sticky label columns auto-narrow to fit whatever's actually on
+  // screen, rather than a fixed width that either wastes space or clips a
+  // long room name. Measured off the DATA (via an offscreen canvas, not the
+  // DOM) so it's correct on the very first paint — a rendered cell's own
+  // width can't be used to measure its "natural" content width since the
+  // table is `table-layout: fixed`, which clips/stretches cells to whatever
+  // width the column is already given, the exact circularity this avoids.
+  const [labelColWidths, setLabelColWidths] = useState({ room: ROOM_COL_WIDTH, bed: BED_COL_WIDTH });
+
+  useLayoutEffect(() => {
+    const vp = viewportRef.current;
+    if (!vp) return;
+    const roomNameEl = vp.querySelector<HTMLElement>(".tr-grid-room-name");
+    const roomMetaEl = vp.querySelector<HTMLElement>(".tr-grid-room-meta");
+    const bedEl = vp.querySelector<HTMLElement>(".tr-grid-bed");
+    if (!roomNameEl || !bedEl) return;
+    const canvas = document.createElement("canvas");
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    const nameFont = getComputedStyle(roomNameEl).font;
+    const metaFont = roomMetaEl ? getComputedStyle(roomMetaEl).font : nameFont;
+    const bedFont = getComputedStyle(bedEl).font;
+
+    let maxRoom = 0;
+    for (const room of data.grid) {
+      ctx.font = nameFont;
+      maxRoom = Math.max(maxRoom, ctx.measureText(room.roomName).width);
+      ctx.font = metaFont;
+      maxRoom = Math.max(maxRoom, ctx.measureText(room.floorName).width);
+    }
+    let maxBed = 0;
+    for (const room of data.grid) {
+      for (const unit of room.units) {
+        ctx.font = bedFont;
+        maxBed = Math.max(maxBed, ctx.measureText(unit.label).width);
+      }
+    }
+
+    // Padding pads out to roughly match each cell's own CSS padding/inset —
+    // approximate is fine, a couple of spare pixels beats clipping.
+    setLabelColWidths({
+      room: Math.ceil(Math.max(90, maxRoom + 28)),
+      bed: Math.ceil(Math.max(40, maxBed + 20)),
+    });
+  }, [data.grid]);
+
+  const roomCellStyle = useMemo<React.CSSProperties>(
+    () => ({ left: 0, width: labelColWidths.room, minWidth: labelColWidths.room, maxWidth: labelColWidths.room }),
+    [labelColWidths.room]
+  );
+  const bedCellStyle = useMemo<React.CSSProperties>(
+    () => ({ left: labelColWidths.room, width: labelColWidths.bed, minWidth: labelColWidths.bed, maxWidth: labelColWidths.bed }),
+    [labelColWidths.room, labelColWidths.bed]
+  );
+
+  // bedId -> its current room/type label — used only for the split-sibling
+  // nav chevrons' hover preview ("Single in Sea 1"), which needs to describe
+  // where the OTHER part of the split currently lives without staff having
+  // to scroll there first to find out.
+  const bedInfoById = useMemo(() => {
+    const map = new Map<number, { bedLabel: string; roomName: string }>();
+    for (const room of data.grid) {
+      for (const unit of room.units) {
+        map.set(unit.bedId, { bedLabel: unit.label, roomName: room.roomName });
+      }
+    }
+    return map;
+  }, [data.grid]);
 
   const dataStartIndex = useMemo(() => nightsBetween(epochStart, data.start), [epochStart, data.start]);
 
@@ -198,12 +419,22 @@ export default function GridCanvas({ initialData, today }: { initialData: GridDa
       virtualizer.scrollToIndex(index, { align: "start" });
       requestAnimationFrame(() => {
         requestAnimationFrame(() => {
+          // `scrollToIndex(..., {align:"start"})` puts the target column's
+          // left edge at viewport x=0 — but the sticky Room/Bed columns sit
+          // on top of that same x=0, `labelColWidths.room + labelColWidths.
+          // bed` px wide, so the target column (and often the next one too)
+          // lands hidden underneath them. Nudging scrollLeft back by that
+          // width afterwards (rather than folding it into the virtualizer's
+          // own scroll math) lands the target column just past the frozen
+          // columns without touching how the virtualizer tracks position.
+          const vp = viewportRef.current;
+          if (vp) vp.scrollLeft = Math.max(0, vp.scrollLeft - (labelColWidths.room + labelColWidths.bed));
           settledRef.current = true;
           setScrollGeneration((g) => g + 1);
         });
       });
     },
-    [virtualizer]
+    [virtualizer, labelColWidths.room, labelColWidths.bed]
   );
 
   // Scroll to "today" on first mount.
@@ -276,11 +507,55 @@ export default function GridCanvas({ initialData, today }: { initialData: GridDa
     scrollToIndexSettled(targetIndex);
   }
 
+  /**
+   * The split-sibling « / » nav icons' click handler — jumps to the OTHER
+   * part's date (same horizontal "land as the first visible column"
+   * behaviour as jumpToDate) and then also brings its ROW into view and
+   * flashes it, so the sibling isn't just technically on-screen somewhere
+   * but is genuinely easy to spot — useful when there are several split
+   * bookings in view at once and it's not obvious which one just moved.
+   * Waits a couple of animation frames after the horizontal jump before
+   * looking for the target pill in the DOM: jumpToDate's own data fetch is
+   * awaited here, but React hasn't necessarily committed the resulting
+   * re-render yet the instant that promise resolves.
+   */
+  async function jumpToSibling(bookingId: number, dateStr: ISODate) {
+    await jumpToDate(dateStr);
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        const el = viewportRef.current?.querySelector<HTMLElement>(`[data-booking-id="${bookingId}"]`);
+        if (!el) return;
+        el.scrollIntoView({ block: "nearest", inline: "nearest" });
+        flashHighlightBooking(bookingId);
+      });
+    });
+  }
+
   // --- Drag-to-pan (both axes), disambiguated from clicks -------------------
 
   const dragRef = useRef<{ startX: number; startY: number; scrollLeft: number; scrollTop: number; dragging: boolean } | null>(null);
   const suppressClickRef = useRef(false);
   const [panning, setPanning] = useState(false);
+
+  // A raw pointermove can fire far more often than the browser actually
+  // repaints (some mice/trackpads report well past 60Hz) — writing
+  // scrollLeft/scrollTop straight from every event was doing that many
+  // layout/scroll passes per frame, most of them immediately superseded by
+  // the next one before ever reaching the screen. Collapsing to the latest
+  // target and applying it once per animation frame cuts that down to
+  // exactly the writes that actually get painted, which is what made
+  // dragging feel heavy/sticky rather than a plain 1:1 tracking issue.
+  const pendingScrollRef = useRef<{ left: number; top: number } | null>(null);
+  const panRafRef = useRef<number | null>(null);
+
+  const flushPanScroll = useCallback(() => {
+    panRafRef.current = null;
+    const pending = pendingScrollRef.current;
+    const vp = viewportRef.current;
+    if (!pending || !vp) return;
+    vp.scrollLeft = pending.left;
+    vp.scrollTop = pending.top;
+  }, []);
 
   const onPointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     if (e.button !== 0) return;
@@ -290,22 +565,25 @@ export default function GridCanvas({ initialData, today }: { initialData: GridDa
     vp.setPointerCapture(e.pointerId);
   }, []);
 
-  const onPointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
-    const ds = dragRef.current;
-    const vp = viewportRef.current;
-    if (!ds || !vp) return;
-    const dx = e.clientX - ds.startX;
-    const dy = e.clientY - ds.startY;
-    if (!ds.dragging && Math.hypot(dx, dy) > 5) {
-      ds.dragging = true;
-      setPanning(true);
-    }
-    if (ds.dragging) {
-      e.preventDefault();
-      vp.scrollLeft = ds.scrollLeft - dx;
-      vp.scrollTop = ds.scrollTop - dy;
-    }
-  }, []);
+  const onPointerMove = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      const ds = dragRef.current;
+      const vp = viewportRef.current;
+      if (!ds || !vp) return;
+      const dx = e.clientX - ds.startX;
+      const dy = e.clientY - ds.startY;
+      if (!ds.dragging && Math.hypot(dx, dy) > 5) {
+        ds.dragging = true;
+        setPanning(true);
+      }
+      if (ds.dragging) {
+        e.preventDefault();
+        pendingScrollRef.current = { left: ds.scrollLeft - dx, top: ds.scrollTop - dy };
+        if (panRafRef.current == null) panRafRef.current = requestAnimationFrame(flushPanScroll);
+      }
+    },
+    [flushPanScroll]
+  );
 
   const onPointerUp = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     const ds = dragRef.current;
@@ -314,6 +592,11 @@ export default function GridCanvas({ initialData, today }: { initialData: GridDa
       setPanning(false);
     }
     dragRef.current = null;
+    if (panRafRef.current != null) {
+      cancelAnimationFrame(panRafRef.current);
+      panRafRef.current = null;
+    }
+    pendingScrollRef.current = null;
     viewportRef.current?.releasePointerCapture(e.pointerId);
   }, []);
 
@@ -374,27 +657,259 @@ export default function GridCanvas({ initialData, today }: { initialData: GridDa
   // --- Auto-allocate (manual, from the "Needs a bed" panel) --------------
 
   const [autoAllocating, setAutoAllocating] = useState(false);
+  const [allocatingId, setAllocatingId] = useState<number | "bulk" | null>(null);
+  const [actionsMenuOpen, setActionsMenuOpen] = useState(false);
+  const [movesMenuOpen, setMovesMenuOpen] = useState(false);
+  const [settingsMenuOpen, setSettingsMenuOpen] = useState(false);
+  // Measured so the "booking details when hovering" preview's mock tooltip
+  // can start a few px past the actual rendered end of the preview name —
+  // a hardcoded percentage would drift out of sync the moment the name
+  // (or the font) changed.
+  const [previewNameWidth, setPreviewNameWidth] = useState(0);
+  // Which Display settings row (if either) the pointer is currently over —
+  // while hovering, that row's own preview shows what you'd GET by
+  // clicking (the opposite of the current setting), not the current
+  // setting itself. That's the whole point of hovering it: an instant
+  // "here's what turning this on/off looks like" even when nothing in the
+  // grid right now happens to demonstrate it (e.g. no booking currently in
+  // view has a Sleeps-near/Shares-bed pairing to look at).
+  const [hoveredPreviewToggle, setHoveredPreviewToggle] = useState<"sharesWith" | "hoverDetails" | null>(null);
+  // Per-browser display preference, not per-user account data — a plain
+  // "how do I want to look at the grid" toggle has no reason to round-trip
+  // through the server or follow someone between machines. Read once on
+  // mount (SSR has no localStorage, so this starts true — the pre-toggle
+  // default — and settles to the real stored value on the client's first
+  // render); more toggles can join this same object later.
+  const [showSharesWithText, setShowSharesWithText] = useState(true);
+  // Whether hovering a pill shows the "GuestName - arrival to departure"
+  // native-style tooltip (see the pill <td>'s own data-tooltip) — on by
+  // default (matches the long-standing behaviour), but some staff find it
+  // noisy once they already know the grid well.
+  const [showHoverDetails, setShowHoverDetails] = useState(true);
+  useEffect(() => {
+    const stored = localStorage.getItem("tr-grid-settings");
+    if (!stored) return;
+    try {
+      const parsed = JSON.parse(stored);
+      if (typeof parsed.showSharesWithText === "boolean") setShowSharesWithText(parsed.showSharesWithText);
+      if (typeof parsed.showHoverDetails === "boolean") setShowHoverDetails(parsed.showHoverDetails);
+    } catch {
+      // Corrupt/foreign value — ignore, keep the default.
+    }
+  }, []);
+  // Both setters merge into the same stored object (reading the CURRENT
+  // state values, not just the one being changed) rather than each
+  // overwriting the whole "tr-grid-settings" key — otherwise toggling one
+  // setting would silently reset the other back to its default the next
+  // time this loads.
+  function updateShowSharesWithText(value: boolean) {
+    setShowSharesWithText(value);
+    localStorage.setItem("tr-grid-settings", JSON.stringify({ showSharesWithText: value, showHoverDetails }));
+  }
+  function updateShowHoverDetails(value: boolean) {
+    setShowHoverDetails(value);
+    localStorage.setItem("tr-grid-settings", JSON.stringify({ showSharesWithText, showHoverDetails: value }));
+  }
+  const [cancellingMoveId, setCancellingMoveId] = useState<string | "all" | null>(null);
+  const [fixOpenGroupId, setFixOpenGroupId] = useState<number | null>(null);
+  const [fixLoading, setFixLoading] = useState(false);
+  const [fixOptions, setFixOptions] = useState<RoomFixOption[] | null>(null);
+  const [fixError, setFixError] = useState<string | null>(null);
+  const [applyingFixRoomId, setApplyingFixRoomId] = useState<number | null>(null);
+  const [fixingAll, setFixingAll] = useState(false);
 
-  async function runAutoAllocate() {
+  async function toggleGroupFix(bookingId: number) {
+    if (fixOpenGroupId === bookingId) {
+      setFixOpenGroupId(null);
+      return;
+    }
+    setFixOpenGroupId(bookingId);
+    setFixOptions(null);
+    setFixError(null);
+    setFixLoading(true);
+    try {
+      const res = await fetch(`/api/bookings/${bookingId}/allocation-fix-options`);
+      if (!res.ok) {
+        setFixError("Could not load fix options.");
+        return;
+      }
+      const body: { options: RoomFixOption[] } = await res.json();
+      setFixOptions(body.options);
+    } finally {
+      setFixLoading(false);
+    }
+  }
+
+  async function applyGroupFixOption(option: RoomFixOption) {
+    setApplyingFixRoomId(option.roomId);
+    setFixError(null);
+    try {
+      // Captured before the move, so undo has somewhere to put things back
+      // — both the group's own beds AND, separately, whoever got evicted to
+      // make room. A split eviction still creates a brand-new booking row
+      // server-side; that new id comes back in the response below, since
+      // there's no way to know it ahead of time from the client.
+      const before = await Promise.all(
+        option.moves.map(async (m) => {
+          const b: { bedId: number | null } = await fetch(`/api/bookings/${m.bookingId}`).then((r) => r.json());
+          return { bookingId: m.bookingId, bedId: b.bedId };
+        })
+      );
+
+      const res = await fetch("/api/bookings/auto-allocate/apply-move", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ moves: option.moves, rejoins: option.rejoins, evictions: option.evictions }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        setFixError(body.error ?? "Could not apply that move.");
+        return;
+      }
+      const applyBody: {
+        evictionResults: { bookingId: number; previousBedId: number | null; previousDepartureDate?: ISODate; createdBookingId?: number }[];
+        closedJoins: { id: number; bed1Id: number; bed2Id: number; mode: "double" | "solo"; startDate: ISODate; endDate: ISODate | null; deleted: boolean }[];
+        createdJoins: { id: number; bed1Id: number; bed2Id: number }[];
+      } = await res.json();
+      setFixOpenGroupId(null);
+      const names = [...new Set(option.moves.map((m) => m.guestName))];
+      pushToast(`Moved ${names.join(", ")} to ${option.roomName}.`);
+      await refreshCurrentWindow();
+      pushHistory({
+        label: `Move ${names.join(", ")} to ${option.roomName}`,
+        undo: async () => {
+          for (const b of before) await apiPatch(`/api/bookings/${b.bookingId}`, { bedId: b.bedId });
+          for (const ev of applyBody.evictionResults) {
+            if (ev.createdBookingId != null) await apiDelete(`/api/bookings/${ev.createdBookingId}`);
+            const patch: { bedId: number | null; departureDate?: ISODate } = { bedId: ev.previousBedId };
+            if (ev.previousDepartureDate != null) patch.departureDate = ev.previousDepartureDate;
+            await apiPatch(`/api/bookings/${ev.bookingId}`, patch);
+          }
+          // A "Fix" that pairs two movers into a couple double (rejoins)
+          // creates a brand-new join row, and moving a booking OFF a bed
+          // that had an active join closes that join as a side effect —
+          // neither of those was previously reversed, which is exactly why
+          // undo used to put the bookings back but leave the bed-type
+          // change (2 singles <-> couple double) in place.
+          for (const cj of applyBody.createdJoins) await apiDelete(`/api/joined-beds/${cj.id}`);
+          for (const cj of applyBody.closedJoins) {
+            if (cj.deleted) {
+              await apiPost("/api/joined-beds", { bed1Id: cj.bed1Id, bed2Id: cj.bed2Id, mode: cj.mode, startDate: cj.startDate, endDate: cj.endDate });
+            } else {
+              await apiPatch(`/api/joined-beds/${cj.id}`, { endDate: cj.endDate });
+            }
+          }
+          await refreshCurrentWindow();
+        },
+        redo: async () => {
+          await apiPost("/api/bookings/auto-allocate/apply-move", { moves: option.moves, rejoins: option.rejoins, evictions: option.evictions });
+          await refreshCurrentWindow();
+        },
+      });
+    } finally {
+      setApplyingFixRoomId(null);
+    }
+  }
+
+  /**
+   * Applies every allocation issue's own cheapest fix, one group at a time
+   * (sequential, not parallel — fixing one group can change what's
+   * available for the next, so each fetch/apply pair must see the other's
+   * result). "Cheapest" = fewest evictions, since every option for a group
+   * already relocates the same people; evictions are the only thing that
+   * varies, and displacing fewer other guests is "the least moves."
+   */
+  async function runFixAll() {
+    setFixingAll(true);
+    try {
+      for (const g of data.issueGroups) {
+        const res = await fetch(`/api/bookings/${g.bookingId}/allocation-fix-options`);
+        if (!res.ok) continue;
+        const body: { options: RoomFixOption[] } = await res.json();
+        if (!body.options || body.options.length === 0) continue;
+        const cheapest = [...body.options].sort((a, b) => a.evictions.length - b.evictions.length)[0];
+        await applyGroupFixOption(cheapest);
+      }
+    } finally {
+      setFixingAll(false);
+    }
+  }
+
+  const [moveProposals, setMoveProposals] = useState<GroupMoveProposal[]>([]);
+  const [applyingProposalKey, setApplyingProposalKey] = useState<string | null>(null);
+
+  async function runAutoAllocate(bookingId?: number) {
     setAutoAllocating(true);
+    setAllocatingId(bookingId ?? "bulk");
     try {
       const res = await fetch("/api/bookings/auto-allocate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ withinDays: 7 }),
+        body: JSON.stringify(bookingId != null ? { bookingId } : { withinDays: 7 }),
       });
       if (!res.ok) {
         pushToast("Could not auto-allocate — please try again.");
         return;
       }
-      const body: { assigned: { guestName: string }[]; skipped: { guestName: string; reason: string }[] } = await res.json();
+      const body: {
+        assigned: { id: number; guestName: string; bedId: number; roomName: string }[];
+        skipped: { guestName: string; reason: string }[];
+        proposals: GroupMoveProposal[];
+      } = await res.json();
       const parts = [`Assigned ${body.assigned.length} booking${body.assigned.length === 1 ? "" : "s"}`];
       if (body.skipped.length > 0) parts.push(`${body.skipped.length} still need${body.skipped.length === 1 ? "s" : ""} a bed`);
       pushToast(parts.join(", ") + ".");
+      setMoveProposals(body.proposals ?? []);
       await fetchWindow(data.start, data.days);
+      if (body.assigned.length > 0) {
+        const label = body.assigned.length === 1 ? `Allocate ${body.assigned[0].guestName}` : `Auto-allocate ${body.assigned.length} bookings`;
+        pushHistory({
+          label,
+          // Every assigned booking was unassigned beforehand by definition
+          // (auto-allocate only ever touches bookings with no bed yet), so
+          // undo is always a plain reset to null — no prior state to look
+          // up. Redo re-applies the SAME bed choice rather than re-running
+          // the search, so it can't land somewhere different the second
+          // time round.
+          undo: async () => {
+            for (const a of body.assigned) await apiPatch(`/api/bookings/${a.id}`, { bedId: null });
+            await refreshCurrentWindow();
+          },
+          redo: async () => {
+            for (const a of body.assigned) await apiPatch(`/api/bookings/${a.id}`, { bedId: a.bedId });
+            await refreshCurrentWindow();
+          },
+        });
+      }
     } finally {
       setAutoAllocating(false);
+      setAllocatingId(null);
     }
+  }
+
+  async function confirmMoveProposal(proposal: GroupMoveProposal) {
+    setApplyingProposalKey(proposal.key);
+    try {
+      const res = await fetch("/api/bookings/auto-allocate/apply-move", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ moves: proposal.moves, rejoinBookingIds: proposal.rejoinBookingIds }),
+      });
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => ({}));
+        pushToast(errBody.error ?? "Could not apply that move — please try again.");
+        return;
+      }
+      setMoveProposals((prev) => prev.filter((p) => p.key !== proposal.key));
+      pushToast(`Moved ${proposal.guestNames.join(", ")} to ${proposal.toRoomName}.`);
+      await fetchWindow(data.start, data.days);
+    } finally {
+      setApplyingProposalKey(null);
+    }
+  }
+
+  function declineMoveProposal(key: string) {
+    setMoveProposals((prev) => prev.filter((p) => p.key !== key));
   }
 
   function notifyUnassigned(unassignedBookings: UnassignedBooking[] | undefined) {
@@ -410,10 +925,51 @@ export default function GridCanvas({ initialData, today }: { initialData: GridDa
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [bedActionModal, setBedActionModal] = useState<BedActionModalState | null>(null);
   const [joinActionModal, setJoinActionModal] = useState<JoinActionModalState | null>(null);
+  const [joinError, setJoinError] = useState<string | null>(null);
   const [joinConflictModal, setJoinConflictModal] = useState<
     (JoinConflictModalState & { retry: (resolution: "overwrite" | "trim") => Promise<boolean> }) | null
   >(null);
   const [confirmModal, setConfirmModal] = useState<ConfirmModalState | null>(null);
+  const [splitMergeConflict, setSplitMergeConflict] = useState<SplitMergeConflictModalState | null>(null);
+  const [plannedChangeConflict, setPlannedChangeConflict] = useState<
+    (PlannedChangeConflictModalState & { lines: PlannedChangeLine[]; id: string | "all" }) | null
+  >(null);
+
+  async function mergeSplitBooking(bookingId: number) {
+    const res = await fetch(`/api/bookings/${bookingId}/merge-split`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (res.status === 409 && Array.isArray(body.conflicts)) {
+      setSplitMergeConflict({ bookingId, conflicts: body.conflicts, canSwap: !!body.canSwap });
+      return;
+    }
+    if (!res.ok) {
+      setError(body.error ?? "Could not merge.");
+      return;
+    }
+    pushToast(body.applied ? "Merged onto this bed." : "Already all on this bed.");
+    await refreshCurrentWindow();
+  }
+
+  async function resolveSplitMergeConflict(resolution: "swap" | "unallocate") {
+    if (!splitMergeConflict) return;
+    const res = await fetch(`/api/bookings/${splitMergeConflict.bookingId}/merge-split`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ resolution }),
+    });
+    setSplitMergeConflict(null);
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      setError(body.error ?? "Could not merge.");
+      return;
+    }
+    pushToast("Merged onto this bed.");
+    await refreshCurrentWindow();
+  }
 
   function openMenu(e: React.MouseEvent, title: string, items: ContextMenuItem[]) {
     e.preventDefault();
@@ -449,6 +1005,159 @@ export default function GridCanvas({ initialData, today }: { initialData: GridDa
       return false;
     }
     return true;
+  }
+
+  async function cancelPlannedChangeLines(lines: PlannedChangeLine[], id: string | "all", confirmed = false) {
+    setCancellingMoveId(id);
+    const bedLocationIds = lines.flatMap((l) => l.bedLocationIds);
+    const joinCancellations = lines
+      .filter((l) => l.kind !== "move")
+      .flatMap((l) => l.joinedBedIds.map((jid) => ({ id: jid, kind: l.kind === "join-start" ? ("start" as const) : ("end" as const) })));
+
+    const res = await fetch("/api/bed-moves", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ bedLocationIds, joinCancellations, confirmed }),
+    });
+    // Some booking already assumes this change will happen (see
+    // findBookingsAffectedByCancel) — ask before cancelling out from under
+    // it, instead of silently leaving that booking pointing at a room/bed
+    // configuration nobody set up. Deliberately neutral between cancelling
+    // and delaying — see PlannedChangeConflictModal's own doc comment for
+    // why the data alone can't say which one staff actually want.
+    if (res.status === 409) {
+      const b: { affected?: { bookingId: number; guestName: string; arrivalDate: ISODate; departureDate: ISODate }[]; pushedDate?: ISODate } =
+        await res.json().catch(() => ({}));
+      setCancellingMoveId(null);
+      if (b.affected && b.affected.length > 0 && b.pushedDate) {
+        setPlannedChangeConflict({
+          lines,
+          id,
+          affected: b.affected,
+          pushedDate: b.pushedDate,
+          configDescription: plannedChangeConfigDescription(lines),
+        });
+      }
+      return;
+    }
+    if (!res.ok) {
+      const b = await res.json().catch(() => ({}));
+      setError(b.error ?? "Something went wrong.");
+      setCancellingMoveId(null);
+      return;
+    }
+    const body: {
+      cancelled: { bedId: number; fromRoomId: number; toRoomId: number; startDate: ISODate; endDate: ISODate | null }[];
+      cancelledJoins: { id: number; kind: "start" | "end"; bed1Id: number; bed2Id: number; mode: "double" | "solo"; startDate: ISODate; endDate: ISODate | null }[];
+    } = await res.json();
+    await refreshCurrentWindow();
+    if (body.cancelled.length > 0 || body.cancelledJoins.length > 0) {
+      // A join-start's undo has to RECREATE the row (it was deleted
+      // outright), which mints a new id every time — captured here so a
+      // subsequent redo knows which row to delete again. A join-end's undo
+      // only ever PATCHes the SAME row's endDate back and forth, so its id
+      // never changes and needs no such tracking.
+      const recreatedJoinIds: (number | null)[] = new Array(body.cancelledJoins.length).fill(null);
+      pushHistory({
+        label: id === "all" ? "Cancel all planned changes" : "Cancel planned change",
+        undo: async () => {
+          for (const c of body.cancelled) {
+            await apiPost("/api/bed-locations", { bedId: c.bedId, roomId: c.toRoomId, startDate: c.startDate, endDate: c.endDate });
+          }
+          for (let i = 0; i < body.cancelledJoins.length; i++) {
+            const cj = body.cancelledJoins[i];
+            if (cj.kind === "start") {
+              const created = await apiPost<{ id: number }>("/api/joined-beds", {
+                bed1Id: cj.bed1Id,
+                bed2Id: cj.bed2Id,
+                mode: cj.mode,
+                startDate: cj.startDate,
+                endDate: cj.endDate,
+              });
+              recreatedJoinIds[i] = created?.id ?? null;
+            } else {
+              await apiPatch(`/api/joined-beds/${cj.id}`, { endDate: cj.endDate });
+            }
+          }
+          await refreshCurrentWindow();
+        },
+        redo: async () => {
+          for (const c of body.cancelled) {
+            await apiPost("/api/bed-locations", { bedId: c.bedId, roomId: c.fromRoomId, startDate: c.startDate });
+          }
+          for (let i = 0; i < body.cancelledJoins.length; i++) {
+            const cj = body.cancelledJoins[i];
+            if (cj.kind === "start") {
+              const rid = recreatedJoinIds[i];
+              if (rid != null) await apiDelete(`/api/joined-beds/${rid}`);
+            } else {
+              await apiPatch(`/api/joined-beds/${cj.id}`, { endDate: null });
+            }
+          }
+          await refreshCurrentWindow();
+        },
+      });
+    }
+    setCancellingMoveId(null);
+  }
+
+  /** The "Delay" resolution from PlannedChangeConflictModal — see that component's own doc comment for why this exists alongside cancelling outright. */
+  async function delayPlannedChangeLines(lines: PlannedChangeLine[], id: string | "all") {
+    setCancellingMoveId(id);
+    const bedLocationIds = lines.flatMap((l) => l.bedLocationIds);
+    const joinCancellations = lines
+      .filter((l) => l.kind !== "move")
+      .flatMap((l) => l.joinedBedIds.map((jid) => ({ id: jid, kind: l.kind === "join-start" ? ("start" as const) : ("end" as const) })));
+
+    const res = await fetch("/api/bed-moves", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ bedLocationIds, joinCancellations, action: "delay" }),
+    });
+    if (!res.ok) {
+      const b = await res.json().catch(() => ({}));
+      setError(b.error ?? "Something went wrong.");
+      setCancellingMoveId(null);
+      return;
+    }
+    const body: {
+      delayed: { bedId: number; toRoomId: number; originalStartDate: ISODate; originalEndDate: ISODate | null; pushedDate: ISODate }[];
+      delayedJoins: { id: number; kind: "start" | "end"; originalDate: ISODate | null; pushedDate: ISODate }[];
+    } = await res.json();
+    await refreshCurrentWindow();
+    pushHistory({
+      label: id === "all" ? "Delay all planned changes" : "Delay planned change",
+      undo: async () => {
+        for (const d of body.delayed) {
+          await apiPost("/api/bed-locations", { bedId: d.bedId, roomId: d.toRoomId, startDate: d.originalStartDate, endDate: d.originalEndDate });
+        }
+        for (const dj of body.delayedJoins) {
+          if (dj.originalDate == null) continue;
+          if (dj.kind === "start") await apiPatch(`/api/joined-beds/${dj.id}`, { startDate: dj.originalDate });
+          else await apiPatch(`/api/joined-beds/${dj.id}`, { endDate: dj.originalDate });
+        }
+        await refreshCurrentWindow();
+      },
+      redo: async () => {
+        for (const d of body.delayed) {
+          await apiPost("/api/bed-locations", { bedId: d.bedId, roomId: d.toRoomId, startDate: d.pushedDate, endDate: d.originalEndDate });
+        }
+        for (const dj of body.delayedJoins) {
+          if (dj.kind === "start") await apiPatch(`/api/joined-beds/${dj.id}`, { startDate: dj.pushedDate });
+          else await apiPatch(`/api/joined-beds/${dj.id}`, { endDate: dj.pushedDate });
+        }
+        await refreshCurrentWindow();
+      },
+    });
+    setCancellingMoveId(null);
+  }
+
+  async function resolvePlannedChangeConflict(resolution: "cancel" | "delay") {
+    if (!plannedChangeConflict) return;
+    const { lines, id } = plannedChangeConflict;
+    setPlannedChangeConflict(null);
+    if (resolution === "cancel") await cancelPlannedChangeLines(lines, id, true);
+    else await delayPlannedChangeLines(lines, id);
   }
 
   async function refreshCurrentWindow() {
@@ -578,10 +1287,11 @@ export default function GridCanvas({ initialData, today }: { initialData: GridDa
               `Conflict: Already joined from ${formatDateUk(conflict.startDate)} to ${conflict.endDate ? formatDateUk(conflict.endDate) : "indefinitely"}`
             );
           } else {
-            setError(body.error ?? "Something went wrong.");
+            setJoinError(body.error ?? "Something went wrong.");
           }
           return false;
         }
+        setJoinError(null);
         notifyUnassigned(body.unassignedBookings);
         // With no explicit resolution requested (no prior collision), the
         // server may still have silently trimmed the end date against a
@@ -750,6 +1460,11 @@ export default function GridCanvas({ initialData, today }: { initialData: GridDa
         });
       },
       async splitBooking(bookingId: number, splitDate: ISODate, guestName: string, originalDeparture: ISODate) {
+        // Captured so undo can put splitGroupId back exactly as it was —
+        // null if this was the booking's first-ever split (undo should
+        // fully un-mark it as part of a lineage), or unchanged if it was
+        // already a piece of an earlier split.
+        const before: { splitGroupId: number | null } = await fetch(`/api/bookings/${bookingId}`).then((r) => r.json());
         const result = await apiPost<{ updated: { id: number }; created: { id: number } }>(
           `/api/bookings/${bookingId}/split`,
           { splitDate }
@@ -763,7 +1478,7 @@ export default function GridCanvas({ initialData, today }: { initialData: GridDa
           label: `Split ${guestName}'s booking on ${formatDateUk(splitDate)}`,
           undo: async () => {
             await apiDelete(`/api/bookings/${currentNewId}`);
-            await apiPatch(`/api/bookings/${bookingId}`, { departureDate: originalDeparture });
+            await apiPatch(`/api/bookings/${bookingId}`, { departureDate: originalDeparture, splitGroupId: before.splitGroupId });
             await refreshCurrentWindow();
           },
           redo: async () => {
@@ -845,6 +1560,49 @@ export default function GridCanvas({ initialData, today }: { initialData: GridDa
           redo: async () => {
             await apiPatch(`/api/bookings/${bookingId}`, to);
             await refreshCurrentWindow();
+          },
+        });
+      },
+      requestShareBedMove(params: {
+        bookingId: number;
+        guestName: string;
+        otherBookingId: number;
+        otherGuestName: string;
+        otherArrivalDate: ISODate;
+        otherDepartureDate: ISODate;
+        to: { bedId: number; arrivalDate: ISODate; departureDate: ISODate };
+        from: { bedId: number; arrivalDate: ISODate; departureDate: ISODate };
+      }) {
+        const { bookingId, guestName, otherBookingId, otherGuestName, otherArrivalDate, otherDepartureDate, to, from } = params;
+        setConfirmModal({
+          title: "Share this bed?",
+          message: `There's already ${otherGuestName} sleeping here from ${formatDateUk(otherArrivalDate)} to ${formatDateUk(otherDepartureDate)}. Do you want ${guestName} and ${otherGuestName} to share the bed?`,
+          confirmLabel: "Share the bed",
+          onConfirm: async () => {
+            const result = await apiPost<{ previousBookingShares: number | null; previousOtherShares: number | null }>(
+              `/api/bookings/${bookingId}/pair-into-bed`,
+              { otherBookingId, bedId: to.bedId, arrivalDate: to.arrivalDate, departureDate: to.departureDate }
+            );
+            if (!result) return;
+            await refreshCurrentWindow();
+            pushToast(`${guestName} now shares a bed with ${otherGuestName}.`);
+            pushHistory({
+              label: `Pair ${guestName} with ${otherGuestName}`,
+              undo: async () => {
+                await apiPatch(`/api/bookings/${bookingId}`, { ...from, sharesBedWithBookingId: result.previousBookingShares });
+                await apiPatch(`/api/bookings/${otherBookingId}`, { sharesBedWithBookingId: result.previousOtherShares });
+                await refreshCurrentWindow();
+              },
+              redo: async () => {
+                await apiPost(`/api/bookings/${bookingId}/pair-into-bed`, {
+                  otherBookingId,
+                  bedId: to.bedId,
+                  arrivalDate: to.arrivalDate,
+                  departureDate: to.departureDate,
+                });
+                await refreshCurrentWindow();
+              },
+            });
           },
         });
       },
@@ -948,13 +1706,40 @@ export default function GridCanvas({ initialData, today }: { initialData: GridDa
           },
         });
       },
+      async deleteEvent(eventId: number, name: string) {
+        const snapshotRes = await fetch("/api/events");
+        const snapshot = snapshotRes.ok ? (await snapshotRes.json()).find((e: { id: number }) => e.id === eventId) : null;
+        if (!(await apiDelete(`/api/events/${eventId}`))) return;
+        await refreshCurrentWindow();
+        if (!snapshot) return;
+        // Recreating on undo gets a NEW row id — this closure variable (not
+        // the original eventId) is what redo/a later undo must target.
+        let currentId = eventId;
+        pushHistory({
+          label: `Delete ${name}`,
+          undo: async () => {
+            const res = await apiPost<{ id: number }>("/api/events", {
+              name: snapshot.name,
+              startDate: snapshot.startDate,
+              endDate: snapshot.endDate,
+              notes: snapshot.notes,
+            });
+            if (res) currentId = res.id;
+            await refreshCurrentWindow();
+          },
+          redo: async () => {
+            await apiDelete(`/api/events/${currentId}`);
+            await refreshCurrentWindow();
+          },
+        });
+      },
       async moveBed(bedId: number, roomId: number, startDate: ISODate, previousRoomId: number) {
         const result = await apiPost("/api/bed-locations", { bedId, roomId, startDate });
         if (!result) return;
         await refreshCurrentWindow();
         if (previousRoomId === roomId) return; // dropped back where it started — nothing to undo
         pushHistory({
-          label: "Move Bed",
+          label: "Move bed",
           undo: async () => {
             // Same effective date, previous room — POST's own truncate logic
             // (see /api/bed-locations) then puts the bed back exactly where
@@ -969,14 +1754,27 @@ export default function GridCanvas({ initialData, today }: { initialData: GridDa
         });
       },
       openBedActionModal: setBedActionModal,
-      openJoinActionModal: setJoinActionModal,
+      openJoinActionModal: (s: JoinActionModalState) => {
+        setJoinError(null);
+        setJoinActionModal(s);
+      },
       openConfirmModal: setConfirmModal,
       navigate: (url: string) => router.push(url),
       dormStorageRoomId: data.dormStorageRoomId,
       today,
+      panning,
+      roomCellStyle,
+      bedCellStyle,
+      jumpToDate,
+      splitGroups: data.splitGroups,
+      mergeSplitBooking,
+      showSharesWithText,
+      showHoverDetails,
+      bedInfoById,
+      jumpToSibling,
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [data.start, data.days, data.dormStorageRoomId, today, router]
+    [data.start, data.days, data.dormStorageRoomId, today, router, panning, roomCellStyle, bedCellStyle, data.splitGroups, showSharesWithText, showHoverDetails, bedInfoById]
   );
 
   // --- Visible-column geometry, shared by every row -------------------------
@@ -997,12 +1795,320 @@ export default function GridCanvas({ initialData, today }: { initialData: GridDa
         {loading ? (
           <span className="tr-muted" style={{ fontSize: 12 }}>Loading…</span>
         ) : null}
+        {(data.alerts.length + data.issueGroups.length) > 0 && (
+          <div style={{ position: "relative" }}>
+            <button
+              type="button"
+              onClick={() => setActionsMenuOpen((v) => !v)}
+              data-tooltip="Allocation issues"
+            >
+              Alerts <span className="tr-actions-badge">{data.alerts.length + data.issueGroups.length}</span>
+            </button>
+            {actionsMenuOpen && (
+              <>
+                <div style={{ position: "fixed", inset: 0, zIndex: 39 }} onClick={() => setActionsMenuOpen(false)} />
+                <div className="tr-actions-menu" style={{ position: "absolute", top: "calc(100% + 6px)", left: 0, zIndex: 40 }}>
+                  {data.alerts.length > 0 && (
+                    <>
+                      <div className="tr-actions-menu-title">
+                        Needs a bed ({data.alerts.length})
+                        <button
+                          type="button"
+                          className="primary"
+                          disabled={autoAllocating}
+                          onClick={() => runAutoAllocate()}
+                          style={{ minHeight: "unset", padding: "3px 8px", fontSize: 11, marginLeft: "auto" }}
+                        >
+                          {allocatingId === "bulk" ? "Allocating…" : "Auto-allocate next 7 days"}
+                        </button>
+                      </div>
+                      <ul className="tr-actions-menu-list">
+                        {data.alerts.map((a) => (
+                          <li
+                            key={a.id}
+                            style={{ cursor: autoAllocating ? "default" : "pointer" }}
+                            onClick={() => !autoAllocating && runAutoAllocate(a.id)}
+                          >
+                            <a href={`/bookings/${a.id}?from=grid`} onClick={(e) => e.stopPropagation()}>
+                              {a.guestName}
+                            </a>
+                            <span className="tr-muted" style={{ fontSize: 11 }}>
+                              {formatDateUk(a.arrivalDate)}–{formatDateUk(a.departureDate)}
+                            </span>
+                            <button
+                              type="button"
+                              className="tr-btn-soft"
+                              disabled={autoAllocating}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                runAutoAllocate(a.id);
+                              }}
+                              style={{ minHeight: "unset", padding: "3px 8px", fontSize: 11 }}
+                            >
+                              {allocatingId === a.id ? "…" : "Allocate"}
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    </>
+                  )}
+                  {data.issueGroups.length > 0 && (
+                    <>
+                      <div className="tr-actions-menu-title">
+                        Allocation issues ({data.issueGroups.length})
+                        <button
+                          type="button"
+                          className="primary"
+                          disabled={fixingAll}
+                          onClick={runFixAll}
+                          style={{ minHeight: "unset", padding: "3px 8px", fontSize: 11, marginLeft: "auto" }}
+                        >
+                          {fixingAll ? "Fixing…" : "Fix all"}
+                        </button>
+                      </div>
+                      <ul className="tr-actions-menu-list">
+                        {data.issueGroups.map((g) => (
+                          <li key={g.bookingId} style={{ display: "block" }}>
+                            <div
+                              style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}
+                              onClick={() => toggleGroupFix(g.bookingId)}
+                            >
+                              <div style={{ flex: 1 }}>{g.guestNames.join(", ")}</div>
+                              <button
+                                type="button"
+                                className="tr-btn-soft"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  toggleGroupFix(g.bookingId);
+                                }}
+                                style={{ minHeight: "unset", padding: "3px 8px", fontSize: 11 }}
+                              >
+                                {fixOpenGroupId === g.bookingId ? "Hide" : "Fix"}
+                              </button>
+                            </div>
+                            {fixOpenGroupId === g.bookingId && (
+                              <div style={{ marginTop: 4, marginBottom: 6 }}>
+                                {fixLoading && <span className="tr-muted" style={{ fontSize: 11 }}>Looking for a room…</span>}
+                                {fixError && <div style={{ fontSize: 11, marginBottom: 4 }}>{fixError}</div>}
+                                {fixOptions && fixOptions.length === 0 && (
+                                  <span className="tr-muted" style={{ fontSize: 11 }}>No room currently fits everyone — move manually.</span>
+                                )}
+                                {fixOptions && fixOptions.length > 0 && (
+                                  <div style={{ display: "flex", flexDirection: "column", gap: 4, alignItems: "flex-start" }}>
+                                    {fixOptions.map((option) => {
+                                      const names = [...new Set(option.moves.map((m) => m.guestName))];
+                                      return (
+                                        <div key={option.roomId}>
+                                          {option.evictions.length > 0 && (
+                                            <div className="tr-muted" style={{ fontSize: 10 }}>
+                                              First {option.evictions
+                                                .map((e) => (e.action === "split" ? `splits & moves part of ${e.guestName}'s stay` : `moves ${e.guestName}`))
+                                                .join(", ")}{" "}
+                                              to {option.evictions[0].newRoomName}.
+                                            </div>
+                                          )}
+                                          <button
+                                            type="button"
+                                            className="tr-btn-soft"
+                                            disabled={applyingFixRoomId === option.roomId}
+                                            onClick={() => applyGroupFixOption(option)}
+                                            style={{ minHeight: "unset", padding: "3px 8px", fontSize: 11 }}
+                                          >
+                                            {applyingFixRoomId === option.roomId ? "Moving…" : `Move ${names.join(", ")} to ${option.roomName}`}
+                                          </button>
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </li>
+                        ))}
+                      </ul>
+                    </>
+                  )}
+                </div>
+              </>
+            )}
+          </div>
+        )}
+        {data.plannedChanges.length > 0 && (
+          <div style={{ position: "relative" }}>
+            <button
+              type="button"
+              onClick={() => setMovesMenuOpen((v) => !v)}
+              data-tooltip="Bed moves, joins and splits for future dates"
+            >
+              Planned changes <span className="tr-actions-badge-neutral">{data.plannedChanges.length}</span>
+            </button>
+            {movesMenuOpen && (
+              <>
+                <div style={{ position: "fixed", inset: 0, zIndex: 39 }} onClick={() => setMovesMenuOpen(false)} />
+                <div className="tr-actions-menu" style={{ position: "absolute", top: "calc(100% + 6px)", left: 0, zIndex: 40 }}>
+                  <div className="tr-actions-menu-title">
+                    Planned changes ({data.plannedChanges.length})
+                    <button
+                      type="button"
+                      className="tr-danger"
+                      disabled={cancellingMoveId != null}
+                      onClick={() => cancelPlannedChangeLines(data.plannedChanges, "all")}
+                      style={{ minHeight: "unset", padding: "3px 8px", fontSize: 11, marginLeft: "auto" }}
+                    >
+                      {cancellingMoveId === "all" ? "Cancelling…" : "Delete all planned changes"}
+                    </button>
+                  </div>
+                  <ul className="tr-actions-menu-list">
+                    {data.plannedChanges.map((m) => (
+                      <li key={m.id}>
+                        <div style={{ flex: 1 }}>{plannedChangeLineText(m)}</div>
+                        <button
+                          type="button"
+                          className="tr-danger"
+                          disabled={cancellingMoveId != null}
+                          onClick={() => cancelPlannedChangeLines([m], m.id)}
+                          style={{ minHeight: "unset", padding: "3px 8px", fontSize: 11 }}
+                        >
+                          {cancellingMoveId === m.id ? "…" : "Delete"}
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              </>
+            )}
+          </div>
+        )}
+        <div style={{ position: "relative" }}>
+          <button
+            type="button"
+            aria-label="Grid display settings"
+            data-tooltip="Grid display settings"
+            onClick={() => setSettingsMenuOpen((v) => !v)}
+            // height matches every other toolbar button's own real rendered
+            // height (40px, from the default button padding — see
+            // globals.css) rather than shrinking to the icon's own smaller
+            // natural size; padding trimmed down from the default 14px
+            // sides (sized for text) since a single icon doesn't need that
+            // much horizontal breathing room — it was rendering noticeably
+            // WIDER than tall, an odd shape next to square-ish icon
+            // buttons elsewhere.
+            style={{ height: 40, padding: "0 11px", display: "inline-flex", alignItems: "center" }}
+          >
+            <GearIcon size={18} />
+          </button>
+          {settingsMenuOpen && (
+            <>
+              <div style={{ position: "fixed", inset: 0, zIndex: 39 }} onClick={() => setSettingsMenuOpen(false)} />
+              <div className="tr-actions-menu tr-settings-menu" style={{ position: "absolute", top: "calc(100% + 6px)", left: 0, zIndex: 40 }}>
+                <div className="tr-actions-menu-title">Display settings</div>
+                <label
+                  className="tr-settings-toggle-row"
+                  onMouseEnter={() => setHoveredPreviewToggle("sharesWith")}
+                  onMouseLeave={() => setHoveredPreviewToggle((v) => (v === "sharesWith" ? null : v))}
+                >
+                  <input
+                    type="checkbox"
+                    checked={showSharesWithText}
+                    onChange={(e) => updateShowSharesWithText(e.target.checked)}
+                    className="tr-settings-checkbox"
+                  />
+                  <span className="tr-settings-toggle-label">
+                    <div style={{ fontWeight: 600 }}>&quot;Shares with&quot; info in grid</div>
+                    <div className="tr-muted" style={{ fontSize: 11, marginTop: 2 }}>
+                      Spells out &quot;(same bed as X)&quot; or &quot;(same room as X)&quot; on every pill with a Sleeps-near/Shares-bed pairing. Turn off to keep just the small icon.
+                    </div>
+                  </span>
+                  {/* Live preview, not a static screenshot — always matches what the toggle actually does, in both themes.
+                      "Nils" and "Hagai" — a small, harmless in-joke for whoever's staring at this menu long enough to
+                      notice, not real guest names anywhere else in the app. minWidth is sized for the LONGER
+                      (toggle-on) state specifically so the pill doesn't visibly resize when the "(same bed as X)"
+                      text appears/disappears — it should always look this wide. While the row is hovered, this shows
+                      what CLICKING would produce (the opposite of the current setting), not the current setting
+                      itself — an instant preview of the effect even when nothing in the real grid right now happens
+                      to demonstrate it. */}
+                  <div className="tr-settings-preview">
+                    <span className="tr-grid-booking-pill" style={{ position: "static", minWidth: 220 }}>
+                      <span className="tr-grid-pill-satisfied" aria-hidden="true">👥</span>
+                      <span className="tr-grid-pill-name">Nils</span>
+                      {(hoveredPreviewToggle === "sharesWith" ? !showSharesWithText : showSharesWithText) && (
+                        <span className="tr-grid-pill-relation">
+                          (same bed as <strong>Hagai</strong>)
+                        </span>
+                      )}
+                    </span>
+                  </div>
+                </label>
+                <label
+                  className="tr-settings-toggle-row"
+                  onMouseEnter={() => setHoveredPreviewToggle("hoverDetails")}
+                  onMouseLeave={() => setHoveredPreviewToggle((v) => (v === "hoverDetails" ? null : v))}
+                >
+                  <input
+                    type="checkbox"
+                    checked={showHoverDetails}
+                    onChange={(e) => updateShowHoverDetails(e.target.checked)}
+                    className="tr-settings-checkbox"
+                  />
+                  <span className="tr-settings-toggle-label">
+                    <div style={{ fontWeight: 600 }}>Booking details when hovering</div>
+                    <div className="tr-muted" style={{ fontSize: 11, marginTop: 2 }}>
+                      Shows the stay dates in a tooltip near the cursor when you hover a pill. The name&apos;s already on the pill, so it isn&apos;t repeated. Alerts keep their own hover text either way.
+                    </div>
+                  </span>
+                  {/* Same live-preview idea as the row above, but for the
+                      tooltip itself — reuses the real tooltip bubble class
+                      (see TooltipHost.tsx / globals.css) as a static mock.
+                      Deliberately a plain pill with no shares-with icon/text
+                      of its own — this toggle applies to every pill, shared
+                      or not, so the preview shouldn't imply it's specific to
+                      that case. Positioned a few px past the name's own
+                      measured width, vertically centered on the pill —
+                      roughly where a real cursor sits once you've actually
+                      read the name before pausing to hover. Shows the
+                      click-would-produce state while the row itself is
+                      hovered, same as the row above. */}
+                  <div className="tr-settings-preview">
+                    <span className="tr-grid-booking-pill" style={{ position: "relative", minWidth: 170 }}>
+                      <span
+                        className="tr-grid-pill-name"
+                        ref={(el) => {
+                          if (!el) return;
+                          const pillEl = el.closest<HTMLElement>(".tr-grid-booking-pill");
+                          if (!pillEl) return;
+                          setPreviewNameWidth(el.getBoundingClientRect().right - pillEl.getBoundingClientRect().left);
+                        }}
+                      >
+                        Donna
+                      </span>
+                      {(hoveredPreviewToggle === "hoverDetails" ? !showHoverDetails : showHoverDetails) && (
+                        <div
+                          className="tr-tooltip-bubble"
+                          style={{
+                            position: "absolute",
+                            top: "50%",
+                            left: previewNameWidth + 8,
+                            transform: "translateY(-100%)",
+                            whiteSpace: "nowrap",
+                          }}
+                        >
+                          06/08/2026 to 10/08/2026
+                        </div>
+                      )}
+                    </span>
+                  </div>
+                </label>
+              </div>
+            </>
+          )}
+        </div>
         <span style={{ flex: 1 }} />
+        <a href="/bookings/new?from=grid"><button type="button" className="primary">+ New booking</button></a>
         <button
           type="button"
           onClick={undo}
           disabled={historyPast.length === 0 || historyBusy}
-          title={historyPast.length > 0 ? `Undo: ${historyPast[historyPast.length - 1].label} (Ctrl+Z)` : "Nothing to undo"}
+          data-tooltip={historyPast.length > 0 ? `Undo: ${historyPast[historyPast.length - 1].label} (Ctrl+Z)` : "Nothing to undo"}
           aria-label="Undo"
         >
           ↶ Undo
@@ -1011,17 +2117,38 @@ export default function GridCanvas({ initialData, today }: { initialData: GridDa
           type="button"
           onClick={redo}
           disabled={historyFuture.length === 0 || historyBusy}
-          title={historyFuture.length > 0 ? `Redo: ${historyFuture[historyFuture.length - 1].label} (Ctrl+Y)` : "Nothing to redo"}
+          data-tooltip={historyFuture.length > 0 ? `Redo: ${historyFuture[historyFuture.length - 1].label} (Ctrl+Y)` : "Nothing to redo"}
           aria-label="Redo"
         >
           ↷ Redo
         </button>
         <button type="button" onClick={() => jumpToDate(today)}>Today</button>
-        <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 12 }}>
-          Jump to
-          <DateField value={jumpValue} onChange={setJumpValue} />
-        </label>
-        <button type="button" className="primary" onClick={() => jumpToDate(jumpValue)}>Go</button>
+        <div style={{ position: "relative" }}>
+          <button
+            type="button"
+            aria-label="Jump to date"
+            data-tooltip="Jump to date"
+            onClick={() => setJumpPickerOpen((v) => !v)}
+            style={{ height: 40, padding: "0 11px", display: "inline-flex", alignItems: "center" }}
+          >
+            <CalendarIcon />
+          </button>
+          {jumpPickerOpen && (
+            <>
+              <div style={{ position: "fixed", inset: 0, zIndex: 39 }} onClick={() => setJumpPickerOpen(false)} />
+              <div style={{ position: "absolute", top: "calc(100% + 4px)", left: 0, zIndex: 40 }}>
+                <CalendarPopover
+                  value={isIsoDate(jumpValue) ? jumpValue : null}
+                  onPick={(iso) => {
+                    setJumpValue(iso);
+                    setJumpPickerOpen(false);
+                    jumpToDate(iso);
+                  }}
+                />
+              </div>
+            </>
+          )}
+        </div>
       </div>
 
       {error && <p className="tr-badge tr-badge-warn" style={{ marginBottom: 10 }}>{error}</p>}
@@ -1045,8 +2172,8 @@ export default function GridCanvas({ initialData, today }: { initialData: GridDa
         <table className="tr-grid" style={{ tableLayout: "fixed" }}>
           <thead>
             <tr>
-              <th className="tr-grid-room" style={{ left: 0, width: ROOM_COL_WIDTH, minWidth: ROOM_COL_WIDTH, maxWidth: ROOM_COL_WIDTH }}>Room</th>
-              <th className="tr-grid-bed" style={{ left: ROOM_COL_WIDTH, width: BED_COL_WIDTH, minWidth: BED_COL_WIDTH, maxWidth: BED_COL_WIDTH }}>Bed</th>
+              <th className="tr-grid-room" style={roomCellStyle}>Room</th>
+              <th className="tr-grid-bed" style={bedCellStyle}>Bed</th>
               {leadingWidth > 0 && <th style={{ width: leadingWidth, minWidth: leadingWidth }} />}
               {visibleColumns.map((col) => (
                 <th
@@ -1062,25 +2189,32 @@ export default function GridCanvas({ initialData, today }: { initialData: GridDa
             </tr>
           </thead>
           <tbody>
-            {data.eventLanes.map((lane, laneIndex) => (
-              <tr key={`event-lane-${laneIndex}`} className="tr-grid-event-lane">
-                <td className="tr-grid-room tr-grid-event-head" style={{ left: 0, width: ROOM_COL_WIDTH, minWidth: ROOM_COL_WIDTH, maxWidth: ROOM_COL_WIDTH }}>
-                  {laneIndex === 0 ? "Events" : ""}
-                </td>
-                <td className="tr-grid-bed" style={{ left: ROOM_COL_WIDTH, width: BED_COL_WIDTH, minWidth: BED_COL_WIDTH, maxWidth: BED_COL_WIDTH }} />
-                {leadingWidth > 0 && <td style={{ width: leadingWidth }} />}
-                {renderEventLaneCells(lane, visibleColumns, dataStartIndex, actions)}
-                {trailingWidth > 0 && <td style={{ width: trailingWidth }} />}
-              </tr>
-            ))}
+            {data.eventLanes.map((lane, laneIndex) => {
+              // Pinned directly under the (already-sticky) header row, one
+              // lane's height below the previous lane, so the whole event
+              // strip stays visible no matter how far down the room rows
+              // are scrolled — see .tr-grid-event-lane's own top offset math.
+              const laneTop = HEADER_ROW_HEIGHT + laneIndex * GRID_ROW_HEIGHT;
+              return (
+                <tr key={`event-lane-${laneIndex}`} className="tr-grid-event-lane">
+                  <td className="tr-grid-room tr-grid-event-head" style={{ ...roomCellStyle, top: laneTop }}>
+                    {laneIndex === 0 ? "Events" : ""}
+                  </td>
+                  <td className="tr-grid-bed" style={{ ...bedCellStyle, top: laneTop }} />
+                  {leadingWidth > 0 && <td style={{ width: leadingWidth, top: laneTop }} />}
+                  {renderEventLaneCells(lane, visibleColumns, dataStartIndex, actions, laneTop)}
+                  {trailingWidth > 0 && <td style={{ width: trailingWidth, top: laneTop }} />}
+                </tr>
+              );
+            })}
 
             {data.grid.map((room, roomIndex) =>
               renderRoomRows(room, roomIndex, visibleColumns, leadingWidth, trailingWidth, actions)
             )}
 
             <tr className="tr-grid-summary">
-              <td className="tr-grid-room" style={{ left: 0, width: ROOM_COL_WIDTH, minWidth: ROOM_COL_WIDTH, maxWidth: ROOM_COL_WIDTH }}>Bed Occupancy</td>
-              <td className="tr-grid-bed" style={{ left: ROOM_COL_WIDTH, width: BED_COL_WIDTH, minWidth: BED_COL_WIDTH, maxWidth: BED_COL_WIDTH }} />
+              <td className="tr-grid-room" style={roomCellStyle}>Bed Occupancy</td>
+              <td className="tr-grid-bed" style={bedCellStyle} />
               {leadingWidth > 0 && <td style={{ width: leadingWidth }} />}
               {visibleColumns.map((col) => {
                 const occ = col.dataIndex != null ? data.occupiedByDate[col.dataIndex] : null;
@@ -1094,8 +2228,8 @@ export default function GridCanvas({ initialData, today }: { initialData: GridDa
               {trailingWidth > 0 && <td style={{ width: trailingWidth }} />}
             </tr>
             <tr className="tr-grid-summary">
-              <td className="tr-grid-room" style={{ left: 0, width: ROOM_COL_WIDTH, minWidth: ROOM_COL_WIDTH, maxWidth: ROOM_COL_WIDTH }}>Arrivals</td>
-              <td className="tr-grid-bed" style={{ left: ROOM_COL_WIDTH, width: BED_COL_WIDTH, minWidth: BED_COL_WIDTH, maxWidth: BED_COL_WIDTH }} />
+              <td className="tr-grid-room" style={roomCellStyle}>Arrivals</td>
+              <td className="tr-grid-bed" style={bedCellStyle} />
               {leadingWidth > 0 && <td style={{ width: leadingWidth }} />}
               {visibleColumns.map((col) => (
                 <td key={col.globalIndex}>{col.dataIndex != null ? data.arrByDate[col.dataIndex] || "" : ""}</td>
@@ -1103,8 +2237,8 @@ export default function GridCanvas({ initialData, today }: { initialData: GridDa
               {trailingWidth > 0 && <td style={{ width: trailingWidth }} />}
             </tr>
             <tr className="tr-grid-summary">
-              <td className="tr-grid-room" style={{ left: 0, width: ROOM_COL_WIDTH, minWidth: ROOM_COL_WIDTH, maxWidth: ROOM_COL_WIDTH }}>Departures</td>
-              <td className="tr-grid-bed" style={{ left: ROOM_COL_WIDTH, width: BED_COL_WIDTH, minWidth: BED_COL_WIDTH, maxWidth: BED_COL_WIDTH }} />
+              <td className="tr-grid-room" style={roomCellStyle}>Departures</td>
+              <td className="tr-grid-bed" style={bedCellStyle} />
               {leadingWidth > 0 && <td style={{ width: leadingWidth }} />}
               {visibleColumns.map((col) => (
                 <td key={col.globalIndex}>{col.dataIndex != null ? data.depByDate[col.dataIndex] || "" : ""}</td>
@@ -1115,34 +2249,44 @@ export default function GridCanvas({ initialData, today }: { initialData: GridDa
         </table>
       </div>
 
-      <p className="tr-muted" style={{ fontSize: 12, marginTop: 8 }}>
+      <HelpButton title="Using the grid">
         Drag anywhere on the grid to pan. Double-click a free cell to start a new booking, or a booking to edit it.
-        Right-click a booking to cancel it. Drag a booking&apos;s middle to move it to a different bed, or its edge to
-        change dates. Click or right-click a bed&apos;s name to move it, join it, or send it to Dorm Storage. Beds in
-        Dorm Storage are greyed out and don&apos;t count toward capacity.
-      </p>
+        Right-click a booking to edit or delete it. Drag a booking&apos;s middle to move it to a different bed, or its
+        edge to change dates. Click or right-click a bed&apos;s name to move it, join it, or send it to Dorm Storage.
+        Beds in Dorm Storage are greyed out and don&apos;t count toward capacity.
+      </HelpButton>
 
-      {data.alerts.length > 0 && (
+      {moveProposals.length > 0 && (
         <div className="tr-grid-alerts-corner">
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
-            <div style={{ fontWeight: 700 }}>Needs a bed ({data.alerts.length})</div>
-            <span style={{ flex: 1 }} />
-            <button type="button" onClick={runAutoAllocate} disabled={autoAllocating} style={{ minHeight: "unset", padding: "3px 8px", fontSize: 12 }}>
-              {autoAllocating ? "Allocating…" : "Auto-allocate next 7 days"}
-            </button>
-          </div>
-          <ul style={{ margin: 0, paddingLeft: 16 }}>
-            {data.alerts.slice(0, 12).map((a) => (
-              <li key={a.id} style={{ marginBottom: 4 }}>
-                <a href={`/bookings/${a.id}`}>{a.guestName}</a> ({formatDateUk(a.arrivalDate)} to {formatDateUk(a.departureDate)})
+          <div style={{ fontWeight: 700, marginBottom: 6 }}>Room full — move group? ({moveProposals.length})</div>
+          <ul style={{ margin: 0, paddingLeft: 0, listStyle: "none" }}>
+            {moveProposals.map((p) => (
+              <li key={p.key} style={{ marginBottom: 10 }}>
+                <div style={{ marginBottom: 4 }}>
+                  Move <strong>{p.guestNames.join(", ")}</strong> from {p.fromRoomName} to <strong>{p.toRoomName}</strong>?
+                </div>
+                <div style={{ display: "flex", gap: 6 }}>
+                  <button
+                    type="button"
+                    className="primary"
+                    disabled={applyingProposalKey === p.key}
+                    onClick={() => confirmMoveProposal(p)}
+                    style={{ minHeight: "unset", padding: "3px 8px", fontSize: 12 }}
+                  >
+                    {applyingProposalKey === p.key ? "Moving…" : "Confirm"}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={applyingProposalKey === p.key}
+                    onClick={() => declineMoveProposal(p.key)}
+                    style={{ minHeight: "unset", padding: "3px 8px", fontSize: 12 }}
+                  >
+                    Decline
+                  </button>
+                </div>
               </li>
             ))}
           </ul>
-          {data.alerts.length > 12 && (
-            <div className="tr-muted" style={{ marginTop: 6, fontSize: 12 }}>
-              +{data.alerts.length - 12} more
-            </div>
-          )}
         </div>
       )}
 
@@ -1158,10 +2302,14 @@ export default function GridCanvas({ initialData, today }: { initialData: GridDa
       />
       <JoinActionModal
         state={joinActionModal}
-        onClose={() => setJoinActionModal(null)}
-        onSubmit={async (startDate, endDate) => {
+        error={joinError}
+        onClose={() => {
+          setJoinActionModal(null);
+          setJoinError(null);
+        }}
+        onSubmit={async (startDate, endDate, partnerBedId) => {
           if (!joinActionModal) return false;
-          const ok = await actions.joinAsNew(joinActionModal.bed1Id, joinActionModal.bed2Id, joinActionModal.mode, startDate, endDate);
+          const ok = await actions.joinAsNew(joinActionModal.bed1Id, partnerBedId, joinActionModal.mode, startDate, endDate);
           if (ok) setJoinActionModal(null);
           return ok;
         }}
@@ -1176,15 +2324,22 @@ export default function GridCanvas({ initialData, today }: { initialData: GridDa
         }}
       />
       <ConfirmModal state={confirmModal} onClose={() => setConfirmModal(null)} />
+      <SplitMergeConflictModal
+        state={splitMergeConflict}
+        onClose={() => setSplitMergeConflict(null)}
+        onResolve={resolveSplitMergeConflict}
+      />
+      <PlannedChangeConflictModal
+        state={plannedChangeConflict}
+        onClose={() => setPlannedChangeConflict(null)}
+        onResolve={resolvePlannedChangeConflict}
+      />
       <ToastStack toasts={toasts} onDismiss={dismissToast} />
     </>
   );
 }
 
 // ---------------------------------------------------------------------------
-
-const ROOM_CELL_STYLE = { left: 0, width: ROOM_COL_WIDTH, minWidth: ROOM_COL_WIDTH, maxWidth: ROOM_COL_WIDTH };
-const BED_CELL_STYLE = { left: ROOM_COL_WIDTH, width: BED_COL_WIDTH, minWidth: BED_COL_WIDTH, maxWidth: BED_COL_WIDTH };
 
 // A bed parked in Dorm Storage is off active duty (see rooms.excludeFromCapacity)
 // — every row for that room gets a fixed grey tint instead of the per-room
@@ -1217,7 +2372,7 @@ function roomTrClassName(isFirstRoomRow: boolean, room: RoomGridRow): string | u
 /**
  * Clicking or right-clicking a bed's own label (the left sidebar, not a date
  * cell) opens: whatever join/switch/split options apply to that bed today
- * (if any — plain unjoinable beds get none), then always "Move Bed" and
+ * (if any — plain unjoinable beds get none), then always "Move bed" and
  * "Send to Dorm Storage". `joinMenu` is the same menu object already built
  * per date column in renderPairedBlock/renderNativePairBlock — see
  * `representativeMenu` there — so this never re-derives join state itself.
@@ -1231,7 +2386,7 @@ function bedLabelMenu(
 ): { title: string; items: ContextMenuItem[] } {
   const items: ContextMenuItem[] = [...(joinMenu?.items ?? [])];
   items.push({
-    label: "Move Bed",
+    label: "Move bed",
     onClick: () => actions.openBedActionModal({ mode: "move", bedId, bedLabel, defaultDate: actions.today, previousRoomId: room.roomId }),
   });
   if (!room.excludeFromCapacity) {
@@ -1287,6 +2442,16 @@ interface GridActions {
     from: { bedId: number; arrivalDate: ISODate; departureDate: ISODate },
     guestName: string
   ) => void;
+  requestShareBedMove: (params: {
+    bookingId: number;
+    guestName: string;
+    otherBookingId: number;
+    otherGuestName: string;
+    otherArrivalDate: ISODate;
+    otherDepartureDate: ISODate;
+    to: { bedId: number; arrivalDate: ISODate; departureDate: ISODate };
+    from: { bedId: number; arrivalDate: ISODate; departureDate: ISODate };
+  }) => void;
   resizeBookingDates: (
     bookingId: number,
     field: "arrivalDate" | "departureDate",
@@ -1312,6 +2477,7 @@ interface GridActions {
     to: { startDate: ISODate; endDate: ISODate },
     from: { startDate: ISODate; endDate: ISODate }
   ) => void;
+  deleteEvent: (eventId: number, name: string) => void;
   openBedActionModal: (state: BedActionModalState) => void;
   openJoinActionModal: (state: JoinActionModalState) => void;
   openConfirmModal: (state: ConfirmModalState) => void;
@@ -1321,6 +2487,25 @@ interface GridActions {
   dormStorageRoomId: number;
   /** Not a click handler — just data along for the ride, so the bed-label menu can default its date picker without threading a separate prop through every render*Block function. */
   today: ISODate;
+  /** True for the duration of a drag-to-pan gesture — cell renderers use this to suppress their own `title` tooltip, which otherwise gets stuck showing (pointer capture during the pan stops the browser from ever re-hit-testing to dismiss it). */
+  panning: boolean;
+  /** Sticky-column inline styles for the Room/Bed label cells, sized to fit the longest room/floor name and bed label currently on screen — see the measurement effect near viewportRef. Passed along here (like dormStorageRoomId/today) so render*Block functions don't need it threaded through their own parameter lists. */
+  roomCellStyle: React.CSSProperties;
+  bedCellStyle: React.CSSProperties;
+  /** Scrolls (and loads more data if needed) so `dateStr` is in view — used by the "Jump to" field and, per-booking, the split-sibling « / » nav icons on a pill. */
+  jumpToDate: (dateStr: ISODate) => Promise<void>;
+  /** Every split-booking lineage in the system, keyed by splitGroupId — see GridData.splitGroups. */
+  splitGroups: Record<string, SplitSiblingBooking[]>;
+  /** Merges every future part of a split booking onto the given part's own bed — see src/lib/split-merge.ts. Not currently on the undo/redo stack (see the module's own note). */
+  mergeSplitBooking: (bookingId: number) => Promise<void>;
+  /** Per-browser display preference (gear icon menu) — whether a pill spells out "(same bed as X)"/"(same room as X)" in full, or just shows the quiet satisfied/unsatisfied icon. */
+  showSharesWithText: boolean;
+  /** Per-browser display preference (gear icon menu) — whether hovering a booking pill shows the "GuestName - arrival to departure" detail tooltip. */
+  showHoverDetails: boolean;
+  /** bedId -> its current room/type label, for the split-sibling nav chevrons' hover preview. */
+  bedInfoById: Map<number, { bedLabel: string; roomName: string }>;
+  /** Jumps to the other part of a split booking's date AND row, flashing it once it's in view — see the component's own jumpToSibling. */
+  jumpToSibling: (bookingId: number, dateStr: ISODate) => Promise<void>;
 }
 
 /**
@@ -1396,7 +2581,11 @@ function renderRoomRows(
       const specs: CellSpec[] = visibleColumns.map((col) => ({
         col,
         cell: col.dataIndex != null ? slot.cells[col.dataIndex] : null,
-        bedId: unit.bedId,
+        // A row-coalesced unit (see grid.ts) spans more than one physical
+        // bed over time — per-date actions (the "+" new-booking cell, Move
+        // Bed) must target whichever bed is actually in service on THAT
+        // date, not always the row's single representative bedId.
+        bedId: (col.dataIndex != null ? unit.bedIdByDate?.[col.dataIndex] : null) ?? unit.bedId,
         bedLabel: unit.label,
         roomName: room.roomName,
         excludeFromCapacity: room.excludeFromCapacity,
@@ -1407,15 +2596,15 @@ function renderRoomRows(
       rows.push(
         <tr key={`${unit.key}-${slotIndex}`} data-bed-id={unit.bedId} className={roomTrClassName(isFirstRoomRow, room)} style={roomTrStyle(room, roomIndex)}>
           {isFirstRoomRow && (
-            <td className="tr-grid-room" style={ROOM_CELL_STYLE} rowSpan={roomRowCount}>
-              <div style={{ fontWeight: 600 }}>{room.roomName}</div>
-              <div className="tr-muted" style={{ fontSize: 11 }}>{room.floorName}</div>
+            <td className="tr-grid-room" style={actions.roomCellStyle} rowSpan={roomRowCount}>
+              <div className="tr-grid-room-name" style={{ fontWeight: 600 }}>{room.roomName}</div>
+              <div className="tr-muted tr-grid-room-meta" style={{ fontSize: 11 }}>{room.floorName}</div>
             </td>
           )}
           {isFirstUnitRow && (
             <td
               className="tr-grid-bed"
-              style={{ ...BED_CELL_STYLE, cursor: "pointer" }}
+              style={{ ...actions.bedCellStyle, cursor: "pointer" }}
               rowSpan={unit.slots.length}
               {...bedLabelHandlers(unit.bedId, unit.label, room, actions)}
             >
@@ -1503,41 +2692,53 @@ function renderPairedBlock(
       });
       // unitB renders nothing here — consumed by unitA's rowSpan.
     } else {
-      // Join options must survive on an ALREADY-BOOKED cell too (joining is
-      // a bed-layout change, independent of whether a guest currently
-      // occupies either bed) — bothActive only checks each bed is placed in
-      // this room on this date, never booking state.
+      // Forming a NEW join here is a physical bed-type change, so — same as
+      // renderPairableSinglesBlock — it's only offered while BOTH beds are
+      // actually free that date; the server rejects it outright otherwise
+      // (see POST /api/joined-beds). Switching an EXISTING join's mode, or
+      // splitting it back apart, is a different action with its own
+      // (symmetric) server-side guard — those stay offered regardless of
+      // booking state here, same as before.
+      const canJoinHere = cellA?.state === "free" && cellB?.state === "free";
       const menu: ContextMenuItem[] = mode
         ? [
             { label: mode === "double" ? "Switch to Solo Double" : "Switch to Couple Double", onClick: () => actions.switchJoinMode(unitA.bedId, unitB.bedId, col.date, mode === "double" ? "solo" : "double") },
             { label: "Split into Singles", onClick: () => actions.splitJoin(unitA.bedId, unitB.bedId, col.date), danger: true },
           ]
-        : [
-            {
-              label: "Join as Couple Double",
-              onClick: () =>
-                actions.openJoinActionModal({
-                  bed1Id: unitA.bedId,
-                  bed2Id: unitB.bedId,
-                  mode: "double",
-                  title: `${room.roomName} — Join as Couple Double`,
-                  defaultStartDate: col.date,
-                  defaultEndDate: cellA?.state === "booked" ? cellA.booking?.departureDate ?? null : null,
-                }),
-            },
-            {
-              label: "Join as Solo Double",
-              onClick: () =>
-                actions.openJoinActionModal({
-                  bed1Id: unitA.bedId,
-                  bed2Id: unitB.bedId,
-                  mode: "solo",
-                  title: `${room.roomName} — Join as Solo Double`,
-                  defaultStartDate: col.date,
-                  defaultEndDate: cellA?.state === "booked" ? cellA.booking?.departureDate ?? null : null,
-                }),
-            },
-          ];
+        : canJoinHere
+          ? [
+              {
+                label: "Join as Couple Double",
+                onClick: () =>
+                  actions.openJoinActionModal({
+                    bed1Id: unitA.bedId,
+                    bed2Id: unitB.bedId,
+                    mode: "double",
+                    title: `${room.roomName} — Join as Couple Double`,
+                    defaultStartDate: col.date,
+                    defaultEndDate: null,
+                    // unitA/unitB already have a recorded join between exactly
+                    // these two beds elsewhere in the window (that's why this
+                    // renders via renderPairedBlock at all) — no partner
+                    // ambiguity here, so just the one fixed option.
+                    partnerOptions: [{ bedId: unitB.bedId, label: unitB.label, occupied: false }],
+                  }),
+              },
+              {
+                label: "Join as Solo Double",
+                onClick: () =>
+                  actions.openJoinActionModal({
+                    bed1Id: unitA.bedId,
+                    bed2Id: unitB.bedId,
+                    mode: "solo",
+                    title: `${room.roomName} — Join as Solo Double`,
+                    defaultStartDate: col.date,
+                    defaultEndDate: null,
+                    partnerOptions: [{ bedId: unitB.bedId, label: unitB.label, occupied: false }],
+                  }),
+              },
+            ]
+          : [];
       const pairMenu = bothActive ? { title: `${room.roomName} — Single beds`, items: menu } : undefined;
       if (pairMenu && (col.date === actions.today || !representativeMenu)) representativeMenu = pairMenu;
       specsA.push({
@@ -1568,14 +2769,14 @@ function renderPairedBlock(
   return [
     <tr key={`${unitA.key}-paired`} data-bed-id={unitA.bedId} className={roomTrClassName(isFirstRoomRow, room)} style={roomTrStyle(room, roomIndex)}>
       {isFirstRoomRow && (
-        <td className="tr-grid-room" style={ROOM_CELL_STYLE} rowSpan={roomRowCount}>
-          <div style={{ fontWeight: 600 }}>{room.roomName}</div>
-          <div className="tr-muted" style={{ fontSize: 11 }}>{room.floorName}</div>
+        <td className="tr-grid-room" style={actions.roomCellStyle} rowSpan={roomRowCount}>
+          <div className="tr-grid-room-name" style={{ fontWeight: 600 }}>{room.roomName}</div>
+          <div className="tr-muted tr-grid-room-meta" style={{ fontSize: 11 }}>{room.floorName}</div>
         </td>
       )}
       <td
         className="tr-grid-bed"
-        style={{ ...BED_CELL_STYLE, cursor: "pointer" }}
+        style={{ ...actions.bedCellStyle, cursor: "pointer" }}
         rowSpan={1}
         {...bedLabelHandlers(unitA.bedId, unitA.label, room, actions, representativeMenu)}
       >
@@ -1588,7 +2789,7 @@ function renderPairedBlock(
     <tr key={`${unitB.key}-paired`} data-bed-id={unitB.bedId} className={room.excludeFromCapacity ? "tr-grid-room-storage" : undefined} style={roomTrStyle(room, roomIndex)}>
       <td
         className="tr-grid-bed"
-        style={{ ...BED_CELL_STYLE, cursor: "pointer" }}
+        style={{ ...actions.bedCellStyle, cursor: "pointer" }}
         rowSpan={1}
         {...bedLabelHandlers(unitB.bedId, unitB.label, room, actions, representativeMenu)}
       >
@@ -1635,9 +2836,9 @@ function renderNativePairBlock(
 
     if (soloActive && cellA) {
       const menu: ContextMenuItem[] = [
-        { label: `Switch to Couple ${unit.label}`, onClick: () => actions.goCouple(unit.bedId, col.date), danger: true },
+        { label: `Switch to Couple ${formatBedTypeLabel(unit.label)}`, onClick: () => actions.goCouple(unit.bedId, col.date), danger: true },
       ];
-      const soloMenu = { title: `${room.roomName} — Solo ${unit.label}`, items: menu };
+      const soloMenu = { title: `${room.roomName} — Solo ${formatBedTypeLabel(unit.label)}`, items: menu };
       if (col.date === actions.today || !representativeMenu) representativeMenu = soloMenu;
       specsA.push({
         col,
@@ -1656,9 +2857,9 @@ function renderNativePairBlock(
       });
     } else {
       const menu: ContextMenuItem[] | undefined = active
-        ? [{ label: `Switch to Solo ${unit.label}`, onClick: () => actions.goSolo(unit.bedId, col.date) }]
+        ? [{ label: `Switch to Solo ${formatBedTypeLabel(unit.label)}`, onClick: () => actions.goSolo(unit.bedId, col.date) }]
         : undefined;
-      const coupleMenu = menu ? { title: `${room.roomName} — ${unit.label}`, items: menu } : undefined;
+      const coupleMenu = menu ? { title: `${room.roomName} — ${formatBedTypeLabel(unit.label)}`, items: menu } : undefined;
       if (coupleMenu && (col.date === actions.today || !representativeMenu)) representativeMenu = coupleMenu;
       specsA.push({
         col,
@@ -1668,7 +2869,13 @@ function renderNativePairBlock(
         roomName: room.roomName,
         excludeFromCapacity: room.excludeFromCapacity,
         roomId: room.roomId,
-        dividerClass: active ? "tr-grid-divider-dashed" : hasNextUnit ? "tr-grid-divider-solid" : "",
+        // A native two-person bed's two rows are structurally coupled by
+        // bed TYPE, not by a per-date join relationship — unlike the
+        // Couple/Solo Double case, there's no "independent" state to fall
+        // back to, so this stays dashed even on a date this unit isn't
+        // placed anywhere (state "inactive"): it's still the same one bed,
+        // the dashed seam is about its own shape, not its placement.
+        dividerClass: "tr-grid-divider-dashed",
         menu: coupleMenu,
       });
       specsB.push({
@@ -1688,14 +2895,14 @@ function renderNativePairBlock(
   return [
     <tr key={`${unit.key}-native-a`} data-bed-id={unit.bedId} className={roomTrClassName(isFirstRoomRow, room)} style={roomTrStyle(room, roomIndex)}>
       {isFirstRoomRow && (
-        <td className="tr-grid-room" style={ROOM_CELL_STYLE} rowSpan={roomRowCount}>
-          <div style={{ fontWeight: 600 }}>{room.roomName}</div>
-          <div className="tr-muted" style={{ fontSize: 11 }}>{room.floorName}</div>
+        <td className="tr-grid-room" style={actions.roomCellStyle} rowSpan={roomRowCount}>
+          <div className="tr-grid-room-name" style={{ fontWeight: 600 }}>{room.roomName}</div>
+          <div className="tr-muted tr-grid-room-meta" style={{ fontSize: 11 }}>{room.floorName}</div>
         </td>
       )}
       <td
         className="tr-grid-bed"
-        style={{ ...BED_CELL_STYLE, cursor: "pointer" }}
+        style={{ ...actions.bedCellStyle, cursor: "pointer" }}
         rowSpan={2}
         {...bedLabelHandlers(unit.bedId, unit.label, room, actions, representativeMenu)}
       >
@@ -1744,33 +2951,56 @@ function renderPairableSinglesBlock(
     const cellA = col.dataIndex != null ? slotA.cells[col.dataIndex] : null;
     const cellB = col.dataIndex != null ? slotB.cells[col.dataIndex] : null;
     const bothActive = cellA && cellA.state !== "inactive" && cellB && cellB.state !== "inactive";
-    const menu: ContextMenuItem[] = [
-      {
-        label: "Join as Couple Double",
-        onClick: () =>
-          actions.openJoinActionModal({
-            bed1Id: unitA.bedId,
-            bed2Id: unitB.bedId,
-            mode: "double",
-            title: `${room.roomName} — Join as Couple Double`,
-            defaultStartDate: col.date,
-            defaultEndDate: cellA?.state === "booked" ? cellA.booking?.departureDate ?? null : null,
-          }),
-      },
-      {
-        label: "Join as Solo Double",
-        onClick: () =>
-          actions.openJoinActionModal({
-            bed1Id: unitA.bedId,
-            bed2Id: unitB.bedId,
-            mode: "solo",
-            title: `${room.roomName} — Join as Solo Double`,
-            defaultStartDate: col.date,
-            defaultEndDate: cellA?.state === "booked" ? cellA.booking?.departureDate ?? null : null,
-          }),
-      },
-    ];
-    const sharedMenu = bothActive ? { title: `${room.roomName} — Single beds`, items: menu } : undefined;
+    // Joining is a physical bed-type change — pushing two mattresses
+    // together — not a guest-pairing action (that's "Shares Bed With" on
+    // the booking form instead), so BOTH beds involved must be free for
+    // the server to actually accept it (see POST /api/joined-beds). Only
+    // offering the action at all when the clicked bed (unitA) is itself
+    // free avoids presenting a choice that's guaranteed to be rejected.
+    const partnerOptions = singleUnitPartnerOptions(room, unitA.bedId, col.dataIndex);
+    // unitA/unitB are just whichever two Singles happened to sort adjacent
+    // (see sortRoomUnits) — NOT necessarily the two beds staff actually
+    // mean to pair (e.g. a genuinely free bed elsewhere in the room, with
+    // an occupied one sorting in between). Default to unitB only if it's
+    // actually free for this date; otherwise search every other Single in
+    // the room for one that is, so the default choice is never one the
+    // server would reject outright. Still offered as a full list in the
+    // modal either way, so staff can always override it.
+    const cellBFree = cellB?.state === "free";
+    const freeAlternative = partnerOptions.find((o) => o.bedId !== unitB.bedId && !o.occupied);
+    const defaultBed2Id = cellBFree ? unitB.bedId : freeAlternative?.bedId ?? unitB.bedId;
+    const canJoinHere = cellA?.state === "free";
+    const menu: ContextMenuItem[] = canJoinHere
+      ? [
+          {
+            label: "Join as Couple Double",
+            onClick: () =>
+              actions.openJoinActionModal({
+                bed1Id: unitA.bedId,
+                bed2Id: defaultBed2Id,
+                mode: "double",
+                title: `${room.roomName} — Join as Couple Double`,
+                defaultStartDate: col.date,
+                defaultEndDate: null,
+                partnerOptions,
+              }),
+          },
+          {
+            label: "Join as Solo Double",
+            onClick: () =>
+              actions.openJoinActionModal({
+                bed1Id: unitA.bedId,
+                bed2Id: defaultBed2Id,
+                mode: "solo",
+                title: `${room.roomName} — Join as Solo Double`,
+                defaultStartDate: col.date,
+                defaultEndDate: null,
+                partnerOptions,
+              }),
+          },
+        ]
+      : [];
+    const sharedMenu = bothActive && menu.length > 0 ? { title: `${room.roomName} — Single beds`, items: menu } : undefined;
     if (sharedMenu && (col.date === actions.today || !representativeMenu)) representativeMenu = sharedMenu;
 
     specsA.push({
@@ -1800,14 +3030,14 @@ function renderPairableSinglesBlock(
   return [
     <tr key={`${unitA.key}-pairable`} data-bed-id={unitA.bedId} className={roomTrClassName(isFirstRoomRow, room)} style={roomTrStyle(room, roomIndex)}>
       {isFirstRoomRow && (
-        <td className="tr-grid-room" style={ROOM_CELL_STYLE} rowSpan={roomRowCount}>
-          <div style={{ fontWeight: 600 }}>{room.roomName}</div>
-          <div className="tr-muted" style={{ fontSize: 11 }}>{room.floorName}</div>
+        <td className="tr-grid-room" style={actions.roomCellStyle} rowSpan={roomRowCount}>
+          <div className="tr-grid-room-name" style={{ fontWeight: 600 }}>{room.roomName}</div>
+          <div className="tr-muted tr-grid-room-meta" style={{ fontSize: 11 }}>{room.floorName}</div>
         </td>
       )}
       <td
         className="tr-grid-bed"
-        style={{ ...BED_CELL_STYLE, cursor: "pointer" }}
+        style={{ ...actions.bedCellStyle, cursor: "pointer" }}
         rowSpan={1}
         {...bedLabelHandlers(unitA.bedId, unitA.label, room, actions, representativeMenu)}
       >
@@ -1820,7 +3050,7 @@ function renderPairableSinglesBlock(
     <tr key={`${unitB.key}-pairable`} data-bed-id={unitB.bedId} className={room.excludeFromCapacity ? "tr-grid-room-storage" : undefined} style={roomTrStyle(room, roomIndex)}>
       <td
         className="tr-grid-bed"
-        style={{ ...BED_CELL_STYLE, cursor: "pointer" }}
+        style={{ ...actions.bedCellStyle, cursor: "pointer" }}
         rowSpan={1}
         {...bedLabelHandlers(unitB.bedId, unitB.label, room, actions, representativeMenu)}
       >
@@ -1864,7 +3094,7 @@ interface CellSpec {
 function cellMenuItems(spec: CellSpec, actions: GridActions): ContextMenuItem[] {
   const items: ContextMenuItem[] = [...(spec.menu?.items ?? [])];
   items.push({
-    label: "Move Bed",
+    label: "Move bed",
     onClick: () => actions.openBedActionModal({ mode: "move", bedId: spec.bedId, bedLabel: spec.bedLabel, defaultDate: spec.col.date, previousRoomId: spec.roomId }),
   });
   if (!spec.excludeFromCapacity) {
@@ -1890,21 +3120,23 @@ function cellMenuItems(spec: CellSpec, actions: GridActions): ContextMenuItem[] 
 function bookingCellMenuItems(
   spec: CellSpec,
   actions: GridActions,
-  booking: { id: number; guestName: string; arrivalDate: ISODate; departureDate: ISODate },
+  booking: { id: number; guestName: string; arrivalDate: ISODate; departureDate: ISODate; splitGroupId?: number | null },
   /** The exact date column that was right-clicked, if different from spec.col.date (a booking pill spans several columns — see renderBookingPill's onContextMenu). */
   clickDate?: ISODate
 ): ContextMenuItem[] {
-  const items: ContextMenuItem[] = [];
+  const items: ContextMenuItem[] = [
+    { label: "Edit booking", onClick: () => actions.navigate(`/bookings/${booking.id}?from=grid`) },
+  ];
   const splitDate = clickDate ?? spec.col.date;
   // Only offer a split strictly between the two edges — splitting exactly
   // on the arrival or departure date would leave a zero-night booking on
   // one side.
   if (splitDate > booking.arrivalDate && splitDate < booking.departureDate) {
     items.push({
-      label: `Split Booking on ${formatDateUk(splitDate)}`,
+      label: `Split booking on ${formatDateUk(splitDate)}`,
       onClick: () =>
         actions.openConfirmModal({
-          title: "Split Booking",
+          title: "Split booking",
           message: `Split ${booking.guestName}'s booking into two separate bookings, dividing on ${formatDateUk(splitDate)}?`,
           confirmLabel: "Split",
           onConfirm: () => actions.splitBooking(booking.id, splitDate, booking.guestName, booking.departureDate),
@@ -1930,22 +3162,28 @@ function bookingCellMenuItems(
     departingBooking.guestName.trim().toLowerCase() === booking.guestName.trim().toLowerCase()
   ) {
     items.push({
-      label: "Merge Bookings",
+      label: "Merge bookings",
       onClick: () =>
         actions.openConfirmModal({
-          title: "Merge Bookings",
+          title: "Merge bookings",
           message: `Merge ${booking.guestName}'s two bookings (${formatDateUk(departingBooking.arrivalDate)}–${formatDateUk(departingBooking.departureDate)} and ${formatDateUk(booking.arrivalDate)}–${formatDateUk(booking.departureDate)}) into one continuous stay?`,
           confirmLabel: "Merge",
           onConfirm: () => actions.mergeBookings(departingBooking.id, booking.id, booking.guestName),
         }),
     });
   }
+  if (booking.splitGroupId != null) {
+    items.push({
+      label: "Merge split parts onto this bed",
+      onClick: () => actions.mergeSplitBooking(booking.id),
+    });
+  }
   items.push({
-    label: "Delete Booking",
+    label: "Delete booking",
     danger: true,
     onClick: () =>
       actions.openConfirmModal({
-        title: "Delete Booking",
+        title: "Delete booking",
         message: `Delete ${booking.guestName}'s booking (${formatDateUk(booking.arrivalDate)}–${formatDateUk(booking.departureDate)})? This can be undone with Ctrl+Z immediately after.`,
         confirmLabel: "Delete",
         onConfirm: () => actions.cancelBooking(booking.id, booking.guestName),
@@ -1980,7 +3218,12 @@ function renderRowCells(specs: CellSpec[], actions: GridActions): React.ReactNod
         specs[j].cell?.state === "booked" &&
         specs[j].cell?.booking?.id === bookingId &&
         specs[j].dividerClass === spec.dividerClass &&
-        !!specs[j].menu === !!spec.menu &&
+        // spec.menu is never consulted for a BOOKED cell (bookingCellMenuItems,
+        // not cellMenuItems, handles its context menu) — only free cells read
+        // it. It varying per date here (e.g. a "Join as Couple Double" option
+        // only appearing once a neighbouring bed exists) used to needlessly
+        // split one continuous booking's pill into chevron'd fragments right
+        // at that date, even though nothing about the booking itself changed.
         (specs[j].rowSpan ?? 1) === (spec.rowSpan ?? 1)
       ) {
         j += 1;
@@ -2005,12 +3248,25 @@ function renderRowCells(specs: CellSpec[], actions: GridActions): React.ReactNod
  * right half (a same-day arrival's pill, inset to start at 50%, or the
  * ordinary "+" new-booking affordance narrowed to the right half).
  */
-function renderDepartingTail(booking: GridBooking, actions: GridActions) {
-  const editHref = `/bookings/${booking.id}`;
+function renderDepartingTail(
+  booking: GridBooking,
+  actions: GridActions,
+  arrivingBooking?: GridBooking,
+  arrivingBedInfo?: { bedLabel: string; roomName: string }
+) {
+  const editHref = `/bookings/${booking.id}?from=grid`;
+  // The later part of the SAME split-into-parts stay, picking up right here
+  // (same bed, arriving the exact day this one departs) — see
+  // laterSiblingIsAdjacentTail's own comment in renderBookingPill, which
+  // suppresses that pill's own » in favour of showing it right here
+  // instead, at the true right edge of this half/half turnover shape.
+  const laterSibling =
+    booking.splitGroupId != null && arrivingBooking?.splitGroupId === booking.splitGroupId ? arrivingBooking : undefined;
   return (
     <a
       key="departing-tail"
       href={editHref}
+      data-booking-id={booking.id}
       draggable={false}
       // Shares .tr-grid-booking-pill's own background/border/text styling
       // (uniform colour throughout a booking's whole span, no separate
@@ -2023,8 +3279,8 @@ function renderDepartingTail(booking: GridBooking, actions: GridActions) {
       // flush/bled on ITS right edge too (see renderBookingPill) — instead
       // of the two sitting in separate <td>s with a bare gap between them,
       // which read as a detached, floating box.
-      style={{ left: -3, width: COLUMN_WIDTH / 2 + 3 }}
-      title={`${booking.guestName} - checks out today`}
+      style={{ left: -3, width: COLUMN_WIDTH / 2 + 3, display: laterSibling ? "flex" : undefined, alignItems: "center", justifyContent: "flex-end" }}
+      data-tooltip={laterSibling ? undefined : `${booking.guestName} - checks out today`}
       // See the identical comment on the "+" new-booking link in
       // renderSingleCell — without this, the viewport's own drag-to-pan
       // handler steals pointer capture and the click/dblclick below never
@@ -2037,6 +3293,22 @@ function renderDepartingTail(booking: GridBooking, actions: GridActions) {
       }}
     >
       {/* No name here — it's already shown once in the booking's own pill; this is just that same pill's visual tail. */}
+      {laterSibling && (
+        <span
+          className="tr-grid-pill-split-nav"
+          style={{ marginRight: 4 }}
+          data-tooltip={`Later part — ${arrivingBedInfo ? `${arrivingBedInfo.bedLabel} in ${arrivingBedInfo.roomName}, ` : ""}from ${formatDateUk(laterSibling.arrivalDate)}`}
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            clearSiblingHoverHighlight(laterSibling.id);
+            actions.jumpToSibling(laterSibling.id, laterSibling.arrivalDate);
+          }}
+        >
+          »
+        </span>
+      )}
     </a>
   );
 }
@@ -2061,10 +3333,11 @@ function renderSingleCell(spec: CellSpec, actions: GridActions) {
     return (
       <td
         key={col.globalIndex}
+        data-bed-id={bedId}
         rowSpan={rowSpan}
         className={[...classes, "tr-grid-inactive"].join(" ")}
         style={{ width: COLUMN_WIDTH, minWidth: COLUMN_WIDTH, maxWidth: COLUMN_WIDTH, ...weekendStyle }}
-        title={cell ? "Not placed in this room on this date" : "Loading…"}
+        data-tooltip={cell ? "Not placed in this room on this date" : "Loading…"}
       />
     );
   }
@@ -2077,26 +3350,27 @@ function renderSingleCell(spec: CellSpec, actions: GridActions) {
     return (
       <td
         key={col.globalIndex}
+        data-bed-id={bedId}
         rowSpan={rowSpan}
         className={classes.join(" ")}
         style={{ width: COLUMN_WIDTH, minWidth: COLUMN_WIDTH, maxWidth: COLUMN_WIDTH, ...weekendStyle, cursor: "default" }}
         onContextMenu={onContextMenu}
-        title={`${roomName} — in Dorm Storage, not bookable`}
+        data-tooltip={`${roomName} — in Dorm Storage, not bookable`}
       />
     );
   }
 
-  const newBookingHref = `/bookings/new?bedId=${bedId}&arrival=${col.date}&departure=${addDaysIso(col.date, 1)}`;
+  const newBookingHref = `/bookings/new?bedId=${bedId}&arrival=${col.date}&departure=${addDaysIso(col.date, 1)}&from=grid`;
   const departingBooking = cell.departingBooking;
 
   return (
     <td
       key={col.globalIndex}
+      data-bed-id={bedId}
       rowSpan={rowSpan}
       className={classes.join(" ")}
       style={{ width: COLUMN_WIDTH, minWidth: COLUMN_WIDTH, maxWidth: COLUMN_WIDTH, ...weekendStyle }}
       onContextMenu={onContextMenu}
-      title={`New booking - ${roomName}, night of ${formatDateUk(col.date)}`}
     >
       {departingBooking && renderDepartingTail(departingBooking, actions)}
       <a
@@ -2147,12 +3421,14 @@ function renderSingleCell(spec: CellSpec, actions: GridActions) {
 // the pill, so no window-level listeners are needed either.
 type PillDragKind = "move" | "resize-start" | "resize-end";
 
-type DropValidity = "valid" | "swap" | "invalid";
+type DropValidity = "valid" | "valid-shares" | "swap" | "invalid";
 
 interface PillDragState {
   kind: PillDragKind;
   bookingId: number;
   guestName: string;
+  /** A split booking's own dates never move by dragging — see onPillPointerDown's own comment. */
+  isSplitBooking: boolean;
   bedId: number;
   arrivalDate: ISODate;
   departureDate: ISODate;
@@ -2172,9 +3448,79 @@ interface PillDragState {
   dropValidity: DropValidity | null;
   /** Move only: the booking(s) currently occupying the hovered target bed for the dragged booking's (possibly date-shifted) range. */
   conflicts: OccupancyEntry[];
+  /** Latest raw pointer position — the auto-scroll loop below re-reads this every frame instead of only reacting to individual pointermove events, so scrolling keeps going even while the pointer sits still near an edge. */
+  lastClientX: number;
+  lastClientY: number;
+  /** requestAnimationFrame handle for the edge auto-scroll loop, if running. */
+  autoScrollRAF: number | null;
 }
 
 let pillDragState: PillDragState | null = null;
+
+// How close to the scrollable viewport's own edge (in px) the pointer needs
+// to get before auto-scroll kicks in, and how fast it scrolls right at the
+// edge (tapering to 0 at EDGE_ZONE_PX away) — dragging a booking toward the
+// bottom (or top/left/right) of the grid used to just stop working the
+// moment the pointer left the currently-rendered rows/columns: with no
+// scroll happening, the ghost's target row lookup (document.elementFromPoint
+// at the pointer's position) found nothing there, fell back to the
+// booking's own ORIGIN row, and the ghost visibly snapped back to wherever
+// that happened to be on screen — which read as "the drag jumping to the
+// top" whenever the origin bed was above the current scroll position.
+const EDGE_ZONE_PX = 72;
+const MAX_AUTO_SCROLL_PX = 30;
+
+function autoScrollSpeed(distanceFromEdge: number): number {
+  if (distanceFromEdge >= EDGE_ZONE_PX) return 0;
+  if (distanceFromEdge <= 0) return MAX_AUTO_SCROLL_PX;
+  return MAX_AUTO_SCROLL_PX * (1 - distanceFromEdge / EDGE_ZONE_PX);
+}
+
+/**
+ * Scrolls `.tr-grid-viewport` toward wherever the pointer currently sits
+ * near its edge, every animation frame, for as long as a drag is active —
+ * both axes, since the grid virtualizes dates horizontally the same way it
+ * lets rows overflow vertically, and a move can need either. Re-reads
+ * pillDragState.lastClientX/Y each frame (kept fresh by onPillPointerMove)
+ * rather than the position from whenever this loop started, so it responds
+ * to the pointer immediately even between actual move events.
+ */
+function runAutoScrollLoop(viewport: HTMLElement) {
+  const ds = pillDragState;
+  if (!ds) return;
+  const rect = viewport.getBoundingClientRect();
+  // The Room/Bed columns are sticky (position: sticky) INSIDE this same
+  // scrollable element, so they visually — and interactively — cover the
+  // left EDGE_ZONE_PX of the viewport's own bounding rect at all times; a
+  // pointer can never physically get closer to rect.left than the sticky
+  // columns' own right edge. Measuring the left edge from there instead (not
+  // raw rect.left) is what actually makes left-edge auto-scroll reachable.
+  const roomEl = viewport.querySelector<HTMLElement>(".tr-grid-room");
+  const bedEl = viewport.querySelector<HTMLElement>(".tr-grid-bed");
+  const stickyWidth = (roomEl?.offsetWidth ?? 0) + (bedEl?.offsetWidth ?? 0);
+  const upSpeed = autoScrollSpeed(ds.lastClientY - rect.top);
+  const downSpeed = autoScrollSpeed(rect.bottom - ds.lastClientY);
+  const leftSpeed = autoScrollSpeed(ds.lastClientX - (rect.left + stickyWidth));
+  const rightSpeed = autoScrollSpeed(rect.right - ds.lastClientX);
+  if (downSpeed > 0) viewport.scrollTop += downSpeed;
+  else if (upSpeed > 0) viewport.scrollTop -= upSpeed;
+  if (rightSpeed > 0) viewport.scrollLeft += rightSpeed;
+  else if (leftSpeed > 0) viewport.scrollLeft -= leftSpeed;
+  ds.autoScrollRAF = requestAnimationFrame(() => runAutoScrollLoop(viewport));
+}
+
+function ensureAutoScrollLoop(viewport: HTMLElement) {
+  const ds = pillDragState;
+  if (!ds || ds.autoScrollRAF != null) return;
+  ds.autoScrollRAF = requestAnimationFrame(() => runAutoScrollLoop(viewport));
+}
+
+function stopAutoScrollLoop(ds: PillDragState | null) {
+  if (ds?.autoScrollRAF != null) {
+    cancelAnimationFrame(ds.autoScrollRAF);
+    ds.autoScrollRAF = null;
+  }
+}
 
 /**
  * Safety-net cleanup, callable with no event object in hand — used both by
@@ -2187,18 +3533,31 @@ let pillDragState: PillDragState | null = null;
 function clearPillDragVisuals() {
   const ds = pillDragState;
   if (!ds) return;
+  stopAutoScrollLoop(ds);
   ds.pillEl.style.opacity = "";
   ds.pillEl.style.cursor = "";
   ds.ghostEl?.remove();
   pillDragState = null;
 }
 
-/** Left/right 15% of the pill = resize that edge's date; the middle 70% = move (change bed). */
+/**
+ * Left/right edge of the pill = resize that edge's date; everything between
+ * = move (change bed). Fixed pixel width rather than a percentage split —
+ * on a short (1-2 night) pill a 15%-of-width zone still leaves a move zone
+ * only a handful of pixels wide, which reads as the resize cursor "sticking"
+ * since almost any hover position near the pill's left/right lands inside
+ * it. Capped to a third of the pill's own width so it never eats the whole
+ * pill on something narrower than RESIZE_ZONE_PX * 2.
+ */
+// Deliberately small — resizing a date edge is a rare gesture next to
+// center-grab (which handles both a bed-row change AND a date shift at
+// once), so almost the whole pill should read as "move."
+const RESIZE_ZONE_PX = 5;
 function pillDragKindAtOffset(offsetX: number, width: number): PillDragKind {
   if (width <= 0) return "move";
-  const ratio = offsetX / width;
-  if (ratio < 0.15) return "resize-start";
-  if (ratio > 0.85) return "resize-end";
+  const zone = Math.min(RESIZE_ZONE_PX, width / 3);
+  if (offsetX < zone) return "resize-start";
+  if (offsetX > width - zone) return "resize-end";
   return "move";
 }
 
@@ -2305,6 +3664,7 @@ function createMoveGhost(ds: PillDragState): HTMLElement {
 
 function moveGhostLabel(ds: PillDragState): string {
   if (ds.dropValidity === "swap") return `Swap with ${ds.conflicts[0]?.guestName ?? "guest"}`;
+  if (ds.dropValidity === "valid-shares") return `Share bed with ${ds.conflicts[0]?.guestName ?? "guest"}?`;
   if (ds.dropValidity === "invalid") return "Occupied — can't drop here";
   const deltaDays = ds.lastDeltaDays;
   if (deltaDays === 0) return ds.guestName;
@@ -2324,7 +3684,12 @@ function updateMoveGhost(ds: PillDragState, rowRect: DOMRect) {
   // matching comment in updateResizeGhost for why (the arrival half-cell
   // inset the committed pill actually has).
   ds.ghostEl.style.left = `${ds.originRect.left + ds.lastDeltaDays * COLUMN_WIDTH + COLUMN_WIDTH / 2}px`;
-  ds.ghostEl.classList.remove("tr-pill-move-ghost-valid", "tr-pill-move-ghost-swap", "tr-pill-move-ghost-invalid");
+  ds.ghostEl.classList.remove(
+    "tr-pill-move-ghost-valid",
+    "tr-pill-move-ghost-valid-shares",
+    "tr-pill-move-ghost-swap",
+    "tr-pill-move-ghost-invalid"
+  );
   if (ds.dropValidity) ds.ghostEl.classList.add(`tr-pill-move-ghost-${ds.dropValidity}`);
   const label = ds.ghostEl.querySelector<HTMLElement>(".tr-pill-move-ghost-label");
   if (label) label.textContent = moveGhostLabel(ds);
@@ -2332,7 +3697,7 @@ function updateMoveGhost(ds: PillDragState, rowRect: DOMRect) {
 
 function onPillPointerDown(
   e: React.PointerEvent<HTMLAnchorElement>,
-  booking: { id: number; guestName: string; arrivalDate: ISODate; departureDate: ISODate },
+  booking: { id: number; guestName: string; arrivalDate: ISODate; departureDate: ISODate; splitGroupId?: number | null },
   bedId: number
 ) {
   if (e.button !== 0) return;
@@ -2350,6 +3715,12 @@ function onPillPointerDown(
     kind,
     bookingId: booking.id,
     guestName: booking.guestName,
+    // A split booking's own date range must never be dragged — one part's
+    // dates changing independently of its siblings would break the
+    // "contiguous stay across beds" shape splitting/merging assumes. Only
+    // its BED can move by dragging; use Split/Merge for the dates
+    // themselves. See onPillPointerMove's move branch, which reads this.
+    isSplitBooking: booking.splitGroupId != null,
     bedId,
     arrivalDate: booking.arrivalDate,
     departureDate: booking.departureDate,
@@ -2368,6 +3739,9 @@ function onPillPointerDown(
     lastDeltaDays: 0,
     dropValidity: null,
     conflicts: [],
+    lastClientX: e.clientX,
+    lastClientY: e.clientY,
+    autoScrollRAF: null,
   };
 }
 
@@ -2392,6 +3766,11 @@ function onPillPointerMove(e: React.PointerEvent<HTMLAnchorElement>) {
   e.stopPropagation();
   ds.pillEl.style.opacity = "0.6";
 
+  ds.lastClientX = e.clientX;
+  ds.lastClientY = e.clientY;
+  const viewportEl = e.currentTarget.closest<HTMLElement>(".tr-grid-viewport");
+  if (viewportEl) ensureAutoScrollLoop(viewportEl);
+
   if (ds.kind === "move") {
     // Center-grab: full 2D — horizontal movement shifts BOTH dates by the
     // same snapped day count (the stay's length never changes, so there's
@@ -2401,16 +3780,23 @@ function onPillPointerMove(e: React.PointerEvent<HTMLAnchorElement>) {
     // tracks the proposed position instead, coloured by a live collision
     // check rather than a blanket row outline.
     if (!ds.ghostEl) ds.ghostEl = createMoveGhost(ds);
-    ds.lastDeltaDays = Math.round(dx / COLUMN_WIDTH);
+    // A split booking locks to vertical-only (bed change) — see
+    // isSplitBooking's own doc comment on PillDragState.
+    ds.lastDeltaDays = ds.isSplitBooking ? 0 : Math.round(dx / COLUMN_WIDTH);
     const proposedArrival = addDaysIso(ds.arrivalDate, ds.lastDeltaDays);
     const proposedDeparture = addDaysIso(ds.departureDate, ds.lastDeltaDays);
 
     const target = document.elementFromPoint(e.clientX, e.clientY);
+    // Checked nearest-ancestor-first (not just the <tr>) — a row-coalesced
+    // unit (see grid.ts) carries a per-cell data-bed-id for whichever
+    // physical bed is in service on that exact date, which the <tr>'s own
+    // data-bed-id (the row's single representative bed) can't express.
+    const bedIdEl = target instanceof Element ? (target.closest("[data-bed-id]") as HTMLElement | null) : null;
     const rowEl = target instanceof Element ? (target.closest("tr[data-bed-id]") as HTMLElement | null) : null;
     // No row under the pointer (e.g. hovering the sticky room/bed label
     // columns) falls back to the booking's own bed, so a pure date-only
     // drag still resolves to a valid same-bed move.
-    const targetBedId = rowEl?.dataset.bedId ? Number(rowEl.dataset.bedId) : ds.bedId;
+    const targetBedId = bedIdEl?.dataset.bedId ? Number(bedIdEl.dataset.bedId) : ds.bedId;
     ds.hoverRowEl = rowEl;
     ds.hoverBedId = targetBedId;
 
@@ -2423,8 +3809,12 @@ function onPillPointerMove(e: React.PointerEvent<HTMLAnchorElement>) {
     // even on a 2-person bed with room to spare.
     const targetCapacity = bedCapacityIndex.get(targetBedId) ?? 1;
     if (targetConflicts.length < targetCapacity) {
-      ds.dropValidity = "valid";
-      ds.conflicts = [];
+      // Spare capacity on a bed that already has someone in it (a native
+      // Queen/1.5/Double, or a joined-singles pair) is never a plain move —
+      // only a deliberate "shares bed with" pairing may fill that second
+      // slot, so this always routes through a confirmation, never silently.
+      ds.dropValidity = targetConflicts.length > 0 ? "valid-shares" : "valid";
+      ds.conflicts = targetConflicts;
     } else if (targetBedId !== ds.bedId && targetConflicts.length === 1 && targetCapacity === 1) {
       // Swap candidate — but only amber if evicting the one booking already
       // there back into the ORIGIN bed, keeping ITS OWN unchanged dates,
@@ -2446,8 +3836,14 @@ function onPillPointerMove(e: React.PointerEvent<HTMLAnchorElement>) {
     }
 
     ds.pillEl.style.cursor = ds.dropValidity === "invalid" ? "not-allowed" : "grabbing";
-    const ghostRowEl = rowEl ?? e.currentTarget.closest("tr");
-    if (ghostRowEl) updateMoveGhost(ds, ghostRowEl.getBoundingClientRect());
+    // The hovered <td> itself (not its <tr>) — a Solo Double's merged cell
+    // is one <td rowSpan=2> sitting in the PRIMARY bed's row; that row's own
+    // <tr> rect is only ever single-row tall (rowSpan bleeds the cell down
+    // into the next <tr> without changing the row's own box), so sizing the
+    // ghost off the <tr> left it half-height and pinned to the top instead
+    // of centred across the full merged cell like the real pill is.
+    const ghostCellEl = bedIdEl ?? rowEl ?? e.currentTarget.closest("tr");
+    if (ghostCellEl) updateMoveGhost(ds, ghostCellEl.getBoundingClientRect());
     return;
   }
 
@@ -2470,7 +3866,14 @@ function onPillPointerMove(e: React.PointerEvent<HTMLAnchorElement>) {
   const proposedArrival = ds.kind === "resize-start" ? addDaysIso(ds.arrivalDate, ds.lastDeltaDays) : ds.arrivalDate;
   const proposedDeparture = ds.kind === "resize-end" ? addDaysIso(ds.departureDate, ds.lastDeltaDays) : ds.departureDate;
   ds.conflicts = conflictingBookings(ds.bedId, proposedArrival, proposedDeparture, ds.bookingId);
-  ds.dropValidity = ds.conflicts.length === 0 ? "valid" : "invalid";
+  // A native multi-capacity bed (e.g. a 1.5-bed, capacity 2) legitimately
+  // has room for ONE other overlapping occupant — comparing against the
+  // bed's own capacity (not just "any conflict at all") is what
+  // checkBedCapacity does server-side too; this used to always go invalid
+  // the moment there was ANY other occupant, even a different guest in the
+  // bed's other, genuinely free slot.
+  const resizeBedCapacity = bedCapacityIndex.get(ds.bedId) ?? 1;
+  ds.dropValidity = ds.conflicts.length < resizeBedCapacity ? "valid" : "invalid";
   updateResizeGhost(ds, ds.lastDeltaDays);
 }
 
@@ -2485,7 +3888,8 @@ function onPillPointerUp(e: React.PointerEvent<HTMLAnchorElement>, actions: Grid
   e.stopPropagation();
 
   if (ds.kind === "move") {
-    if (ds.hoverBedId == null || (ds.dropValidity !== "valid" && ds.dropValidity !== "swap")) return;
+    const validKinds: DropValidity[] = ["valid", "valid-shares", "swap"];
+    if (ds.hoverBedId == null || !ds.dropValidity || !validKinds.includes(ds.dropValidity)) return;
     const toArrival = addDaysIso(ds.arrivalDate, deltaDays);
     const toDeparture = addDaysIso(ds.departureDate, deltaDays);
     if (ds.hoverBedId === ds.bedId && deltaDays === 0) return; // dropped back where it started — no-op
@@ -2497,6 +3901,18 @@ function onPillPointerUp(e: React.PointerEvent<HTMLAnchorElement>, actions: Grid
         { bedId: ds.bedId, arrivalDate: ds.arrivalDate, departureDate: ds.departureDate },
         ds.guestName
       );
+    } else if (ds.dropValidity === "valid-shares") {
+      const other = ds.conflicts[0];
+      actions.requestShareBedMove({
+        bookingId: ds.bookingId,
+        guestName: ds.guestName,
+        otherBookingId: other.id,
+        otherGuestName: other.guestName,
+        otherArrivalDate: other.arrivalDate,
+        otherDepartureDate: other.departureDate,
+        to: { bedId: ds.hoverBedId, arrivalDate: toArrival, departureDate: toDeparture },
+        from: { bedId: ds.bedId, arrivalDate: ds.arrivalDate, departureDate: ds.departureDate },
+      });
     } else {
       const other = ds.conflicts[0];
       actions.swapBookings({
@@ -2639,6 +4055,54 @@ function onEventPointerUp(e: React.PointerEvent<HTMLAnchorElement>, actions: Gri
 }
 
 /**
+ * Momentary attention-getter for a specific booking's pill(s) — used by the
+ * split-sibling nav icons' click handler (jumpToSibling) so landing on the
+ * other part after a jump is obvious even with several split bookings on
+ * screen. Targets every element with this data-booking-id (normally just
+ * one; harmless if a future window-scroll edge case ever renders a booking
+ * as two fragments) rather than assuming a single match.
+ */
+/**
+ * A booking's own "checks out today" departing tail (see renderDepartingTail)
+ * is a SEPARATE <a> from its main pill, bled -3px into it so the two read as
+ * one continuous shape — but a plain ring class applied to both boxes
+ * independently draws two full rectangles, and where they overlap that
+ * shows up as a stray extra vertical line right at the checkout-date seam.
+ * Picks the right variant per matched element (full ring when a booking has
+ * no tail on screen at all, a seam-omitting half-ring on each side when it
+ * does) so the whole shape gets exactly one unbroken outline.
+ */
+function applyPillHighlightClasses(els: NodeListOf<HTMLElement>, add: boolean, baseClass: string) {
+  const hasTail = Array.from(els).some((el) => el.classList.contains("tr-grid-departing-tail"));
+  els.forEach((el) => {
+    const variant = !hasTail ? baseClass : el.classList.contains("tr-grid-departing-tail") ? `${baseClass}-tail` : `${baseClass}-head`;
+    el.classList.toggle(variant, add);
+  });
+}
+
+function flashHighlightBooking(bookingId: number) {
+  const els = document.querySelectorAll<HTMLElement>(`[data-booking-id="${bookingId}"]`);
+  els.forEach((el) => {
+    el.classList.remove("tr-grid-pill-flash", "tr-grid-pill-flash-head", "tr-grid-pill-flash-tail");
+    // Force a reflow so re-adding the class restarts the CSS animation even
+    // if this exact booking was just flashed a moment ago (rapid double
+    // clicks) — without this, the class is already present and the second
+    // add is a no-op, so the animation never restarts.
+    void el.offsetWidth;
+  });
+  applyPillHighlightClasses(els, true, "tr-grid-pill-flash");
+  window.setTimeout(() => applyPillHighlightClasses(els, false, "tr-grid-pill-flash"), 1500);
+}
+
+/** Held (not timed) highlight while hovering a split-sibling nav icon — see setSiblingHoverHighlight/clearSiblingHoverHighlight below the chevrons themselves. */
+function setSiblingHoverHighlight(bookingId: number) {
+  applyPillHighlightClasses(document.querySelectorAll<HTMLElement>(`[data-booking-id="${bookingId}"]`), true, "tr-grid-pill-hover-preview");
+}
+function clearSiblingHoverHighlight(bookingId: number) {
+  applyPillHighlightClasses(document.querySelectorAll<HTMLElement>(`[data-booking-id="${bookingId}"]`), false, "tr-grid-pill-hover-preview");
+}
+
+/**
  * A booking rendered once as a continuous rounded pill spanning every
  * consecutive visible date it covers, instead of repeating the guest name
  * (and arrival/departure marks as raw "<"/"/" characters) in every night's
@@ -2656,10 +4120,28 @@ function renderBookingPill(run: CellSpec[], actions: GridActions) {
   const startsHere = cell.isArrival === true;
   const endsHere = lastCell.isDeparture === true;
 
+  // Needed already here (not just down where the icon itself renders,
+  // below) — see tr-grid-booking-cell-split-tail just below.
+  const siblingsForClasses = booking.splitGroupId != null ? actions.splitGroups[String(booking.splitGroupId)] ?? [] : [];
+  const hasLaterSiblingChevron = endsHere && siblingsForClasses.some((s) => s.arrivalDate > booking.arrivalDate);
+
   const classes = ["tr-grid-cell", "tr-grid-booking-cell"];
   if (first.dividerClass) classes.push(first.dividerClass);
   if (first.extraClass) classes.push(first.extraClass);
+  // A narrow (short-stay) pill's trailing » chevron is pinned to the
+  // pill's true right edge (margin-left: auto — see the icon itself,
+  // below), which can push it past this <td>'s own boundary into the
+  // NEXT date's cell — same kind of overflow .tr-pill-continues-end's own
+  // -3px bleed already handles, just further. That next cell (often a
+  // same-day-turnover departing tail) shares this <td>'s own z-index: 2,
+  // so at equal z-index the later cell wins the DOM-order tie and paints
+  // over the chevron entirely — invisible, not just faint. Bumping THIS
+  // cell to z-index: 3 only when it actually has a trailing chevron to
+  // protect avoids raising it everywhere (which would just move the same
+  // "later cell wins" problem one level up against whatever comes after).
+  if (hasLaterSiblingChevron) classes.push("tr-grid-booking-cell-split-tail");
 
+  const issues = booking.allocationIssues ?? [];
   const pillClasses = ["tr-grid-booking-pill"];
   if (!startsHere) pillClasses.push("tr-pill-continues-start");
   // The right edge of a booking's OWN run is never the true "ending cell"
@@ -2687,7 +4169,7 @@ function renderBookingPill(run: CellSpec[], actions: GridActions) {
   };
 
   const width = COLUMN_WIDTH * run.length;
-  const editHref = `/bookings/${booking.id}`;
+  const editHref = `/bookings/${booking.id}?from=grid`;
   // A true check-in occupies only the right half of its column — the left
   // half is that day's turnover for a DIFFERENT (departing) guest, so two
   // guests never visually overlap when they share a bed's calendar day.
@@ -2700,22 +4182,58 @@ function renderBookingPill(run: CellSpec[], actions: GridActions) {
   // Same-day turnover: this run's own first date is also a DIFFERENT
   // booking's departureDate (see SlotCell.departingBooking) — render that
   // outgoing guest's half-width tail in the left half of this same <td>,
-  // flush against this pill's own left inset.
+  // flush against this pill's own left inset. Always rendered, even when
+  // the "departing" booking is really this same split-into-parts stay's
+  // own earlier part continuing here — that's still a real half/half day
+  // split visually (same shape as any other arrival/departure day), it's
+  // only the » jump-to-sibling chevron that needs special handling for
+  // that case (see renderDepartingTail's own arrivingBooking param).
   const departingBooking = startsHere ? cell.departingBooking : undefined;
+
+  // Split-sibling navigation: only at this run's TRUE edge (never a
+  // window-scroll cutoff, which already owns that slot via the plain ‹/›
+  // chevron below) — the closest earlier/later piece of the same original
+  // split-into-parts stay, if this booking is one.
+  const siblings = siblingsForClasses;
+  const earlierSibling = startsHere
+    ? [...siblings].filter((s) => s.arrivalDate < booking.arrivalDate).sort((a, b) => b.arrivalDate.localeCompare(a.arrivalDate))[0]
+    : undefined;
+  const laterSibling = endsHere
+    ? [...siblings].filter((s) => s.arrivalDate > booking.arrivalDate).sort((a, b) => a.arrivalDate.localeCompare(b.arrivalDate))[0]
+    : undefined;
+  const earlierSiblingBedInfo = earlierSibling?.bedId != null ? actions.bedInfoById.get(earlierSibling.bedId) : undefined;
+  const laterSiblingBedInfo = laterSibling?.bedId != null ? actions.bedInfoById.get(laterSibling.bedId) : undefined;
+  // When the later sibling picks up immediately (same bed, arriving the
+  // exact day this one departs), it renders right next door via this same
+  // booking's own departing tail (see renderDepartingTail's arrivingBooking
+  // param) — the » chevron belongs THERE instead, at the true right edge of
+  // the half/half turnover shape, not stranded inside this pill's own
+  // (visually shorter) box. Any other case — different bed, or a gap in
+  // dates — has no tail standing in for it, so the chevron stays here.
+  const laterSiblingIsAdjacentTail =
+    laterSibling != null && laterSibling.bedId === booking.bedId && laterSibling.arrivalDate === booking.departureDate;
 
   return (
     <td
       key={first.col.globalIndex}
+      data-bed-id={first.bedId}
       colSpan={run.length}
       rowSpan={first.rowSpan}
       className={classes.join(" ")}
       style={{ width, minWidth: width, maxWidth: width, ...weekendOverlayVars(first.col.date) }}
       onContextMenu={onContextMenu}
-      title={`${booking.guestName} - ${formatDateUk(booking.arrivalDate)} to ${formatDateUk(booking.departureDate)}`}
+      // No guest name here — it's already right there on the pill itself
+      // (see .tr-grid-pill-name); repeating it in the tooltip was pure
+      // noise. Issues stay out of this one too — the ⚠ icon carries its
+      // own dedicated tooltip with that text already.
+      data-tooltip={
+        actions.showHoverDetails ? `${formatDateUk(booking.arrivalDate)} to ${formatDateUk(booking.departureDate)}` : undefined
+      }
     >
-      {departingBooking && renderDepartingTail(departingBooking, actions)}
+      {departingBooking && renderDepartingTail(departingBooking, actions, booking, actions.bedInfoById.get(booking.bedId))}
       <a
         href={editHref}
+        data-booking-id={booking.id}
         draggable={false}
         className={pillClasses.join(" ")}
         // Right edge is always handled by the (now unconditional)
@@ -2738,13 +4256,110 @@ function renderBookingPill(run: CellSpec[], actions: GridActions) {
         onPointerMove={onPillPointerMove}
         onPointerUp={(e) => onPillPointerUp(e, actions)}
         onPointerCancel={(e) => onPillPointerUp(e, actions)}
+        onPointerLeave={(e) => {
+          if (!pillDragState) e.currentTarget.style.cursor = "";
+        }}
+        // Hovering ANY part of a split booking previews every OTHER part —
+        // not just the tiny « / » chevron hotspot, which was easy to miss
+        // as the actual trigger. siblings is only ever non-empty for a
+        // split booking, so this is a no-op for a plain one.
+        // Only the OTHER parts — highlighting this pill too (siblings
+        // includes itself) put a second box-shadow ring on the very pill
+        // being hovered, which visibly clashed with its own border and, for
+        // two same-day-turnover parts sitting flush against each other,
+        // pinched into a figure-eight where the two rings met.
+        onMouseEnter={() => siblings.filter((s) => s.id !== booking.id).forEach((s) => setSiblingHoverHighlight(s.id))}
+        onMouseLeave={() => siblings.filter((s) => s.id !== booking.id).forEach((s) => clearSiblingHoverHighlight(s.id))}
       >
         {!startsHere && (
           <span className="tr-grid-pill-chevron" aria-hidden="true">‹</span>
         )}
-        <span className="tr-grid-pill-name">{booking.guestName}</span>
+        {earlierSibling && (
+          <span
+            className="tr-grid-pill-split-nav"
+            data-tooltip={`Earlier part — ${
+              earlierSiblingBedInfo ? `${earlierSiblingBedInfo.bedLabel} in ${earlierSiblingBedInfo.roomName}, ` : ""
+            }from ${formatDateUk(earlierSibling.arrivalDate)}`}
+            // No onMouseEnter/onMouseLeave of its own — this chevron sits
+            // INSIDE the pill's own <a> (a mouseenter/mouseleave pair
+            // doesn't fire again on internal moves between parent and
+            // child), so the parent's whole-pill hover below already covers
+            // it. A separate pair here used to clear the highlight the
+            // moment the pointer left the chevron for the rest of the same
+            // pill — even though the parent was still being hovered — which
+            // read as "the highlight only works right on the arrow."
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              clearSiblingHoverHighlight(earlierSibling.id);
+              actions.jumpToSibling(earlierSibling.id, earlierSibling.arrivalDate);
+            }}
+          >
+            «
+          </span>
+        )}
+        {issues.length > 0 ? (
+          <span className="tr-grid-pill-alert" aria-hidden="true" data-tooltip={`Should ${issues.map((i) => (i.kind === "bed" ? `share a bed with ${i.otherGuestName}` : `be in the same room as ${i.otherGuestName}`)).join("; ")}`}>
+            ⚠
+          </span>
+        ) : (
+          booking.relationship && (
+            // A quiet, always-on signal that a "Sleeps near"/"Shares bed
+            // with" relationship IS being met — the mirror of the ⚠ alert
+            // above for when it's NOT. Kept separate from the full "(same
+            // bed as X)" text (see tr-grid-pill-relation below), which is
+            // the one part staff can turn off — see the grid's own gear menu.
+            <span
+              className="tr-grid-pill-satisfied"
+              aria-hidden="true"
+              data-tooltip={`${booking.relationship.kind === "bed" ? "Shares a bed with" : "Same room as"} ${booking.relationship.otherGuestName}`}
+            >
+              👥
+            </span>
+          )
+        )}
+        <span className="tr-grid-pill-name">{pillDisplayName(booking)}</span>
+        {booking.relationship && actions.showSharesWithText && (
+          <span className="tr-grid-pill-relation">
+            ({booking.relationship.kind === "bed" ? "same bed as" : "same room as"} <strong>{booking.relationship.otherGuestName}</strong>)
+          </span>
+        )}
+        {laterSibling && !laterSiblingIsAdjacentTail && (
+          <span
+            // margin-left: auto pins this flush against the pill's true
+            // right edge (previously it just sat wherever it fell in flow,
+            // right after the name/relation text) — the « on the other end
+            // is already flush left by simply being the first flex child,
+            // no equivalent push needed there.
+            className="tr-grid-pill-split-nav"
+            style={{ marginLeft: "auto" }}
+            data-tooltip={`Later part — ${
+              laterSiblingBedInfo ? `${laterSiblingBedInfo.bedLabel} in ${laterSiblingBedInfo.roomName}, ` : ""
+            }from ${formatDateUk(laterSibling.arrivalDate)}`}
+            // See the earlier-part chevron's own comment above — no
+            // onMouseEnter/onMouseLeave here either, same reason.
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              clearSiblingHoverHighlight(laterSibling.id);
+              actions.jumpToSibling(laterSibling.id, laterSibling.arrivalDate);
+            }}
+          >
+            »
+          </span>
+        )}
         {!endsHere && (
           <span className="tr-grid-pill-chevron" aria-hidden="true">›</span>
+        )}
+        {booking.notes && (
+          // A folded-corner marker, like an Excel cell comment — deliberately
+          // NOT the note text itself (that would compete with the guest name
+          // for the pill's limited width); hover/tap for the full text via
+          // the shared tooltip system, which has no clipping problem here
+          // even though the pill's own <td> is overflow: hidden.
+          <span className="tr-grid-pill-note-corner" aria-hidden="true" data-tooltip={booking.notes} />
         )}
       </a>
     </td>
@@ -2755,7 +4370,8 @@ function renderEventLaneCells(
   lane: GridData["eventLanes"][number],
   visibleColumns: VisibleColumn[],
   dataStartIndex: number,
-  actions: GridActions
+  actions: GridActions,
+  laneTop: number
 ) {
   const cells: React.ReactNode[] = [];
   let i = 0;
@@ -2768,7 +4384,7 @@ function renderEventLaneCells(
     });
 
     if (!band) {
-      cells.push(<td key={col.globalIndex} style={{ width: COLUMN_WIDTH, minWidth: COLUMN_WIDTH, maxWidth: COLUMN_WIDTH }} />);
+      cells.push(<td key={col.globalIndex} style={{ width: COLUMN_WIDTH, minWidth: COLUMN_WIDTH, maxWidth: COLUMN_WIDTH, top: laneTop }} />);
       i += 1;
       continue;
     }
@@ -2790,8 +4406,23 @@ function renderEventLaneCells(
           band.continuesBefore ? "tr-grid-event-open-start" : "",
           band.continuesAfter ? "tr-grid-event-open-end" : "",
         ].filter(Boolean).join(" ")}
-        style={eventColourStyle(band.event.id)}
-        title={`${band.event.name} - ${formatDateUk(band.event.startDate)} to ${formatDateUk(band.event.endDate)}${band.event.notes ? `\n${band.event.notes}` : ""}`}
+        style={{ ...eventColourStyle(band.event.id), top: laneTop }}
+        data-tooltip={`${band.event.name} - ${formatDateUk(band.event.startDate)} to ${formatDateUk(band.event.endDate)}${band.event.notes ? `\n${band.event.notes}` : ""}`}
+        onContextMenu={(e) => {
+          actions.openMenu(e, band.event.name, [
+            {
+              label: "Delete",
+              danger: true,
+              onClick: () =>
+                actions.openConfirmModal({
+                  title: "Delete event",
+                  message: `Delete "${band.event.name}" (${formatDateUk(band.event.startDate)}–${formatDateUk(band.event.endDate)})? This can be undone with Ctrl+Z immediately after.`,
+                  confirmLabel: "Delete",
+                  onConfirm: () => actions.deleteEvent(band.event.id, band.event.name),
+                }),
+            },
+          ]);
+        }}
       >
         <a
           href="/events"

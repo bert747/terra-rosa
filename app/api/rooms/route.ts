@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
 import { rooms } from "@/db/schema";
 import { requireEditor } from "@/lib/auth";
+import { logChange } from "@/lib/change-log";
 
 export const dynamic = "force-dynamic";
 
@@ -27,5 +28,6 @@ export async function POST(req: NextRequest) {
   }
 
   const [room] = await db.insert(rooms).values({ name, floorId }).returning();
+  await logChange({ category: "layout", action: "Created room", summary: `Created room "${name}"` });
   return NextResponse.json(room, { status: 201 });
 }

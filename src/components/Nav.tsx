@@ -1,19 +1,18 @@
 import Link from "next/link";
 import { getCurrentUser } from "@/lib/auth";
 import NavTabs, { type NavLink } from "@/components/NavTabs";
-import BackButton from "@/components/BackButton";
 
 const LINKS: NavLink[] = [
   { href: "/grid", label: "Grid" },
   { href: "/bookings", label: "Bookings" },
   { href: "/events", label: "Events" },
-  { href: "/kitchen", label: "Kitchen" },
-  { href: "/housekeeping", label: "Housekeeping" },
+  { href: "/daily-sheet", label: "Daily Sheet" },
 ];
 
 // Editor-only sections, appended to LINKS for editors.
 const EDITOR_LINKS: NavLink[] = [
   { href: "/settings/layout", label: "Layout" },
+  { href: "/history", label: "History" },
   { href: "/users", label: "Users" },
 ];
 
@@ -23,7 +22,6 @@ export default async function Nav() {
   return (
     <nav className="tr-nav tr-no-print">
       <div className="tr-nav-left">
-        <BackButton />
         <strong className="tr-nav-brand">Terra Rosa</strong>
         <NavTabs links={[...LINKS, ...(user?.role === "editor" ? EDITOR_LINKS : [])]} />
       </div>

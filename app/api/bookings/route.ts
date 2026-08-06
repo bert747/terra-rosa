@@ -5,9 +5,11 @@ import { requireEditor } from "@/lib/auth";
 import { checkBedCapacity } from "@/lib/booking-guard";
 import { checkHouseCapacity } from "@/lib/house-capacity";
 import { nextTimelineEventDate } from "@/lib/next-timeline-event";
+import { logChange } from "@/lib/change-log";
 import { desc } from "drizzle-orm";
+import { formatDateUk } from "@/lib/dates";
 
-const GUEST_TYPES = ["resident", "ashrami", "guest"] as const;
+const GUEST_TYPES = ["resident", "ashrami", "guest", "friends_family"] as const;
 
 export const dynamic = "force-dynamic";
 
@@ -24,7 +26,11 @@ export async function POST(req: NextRequest) {
   }
 
   const body = await req.json();
-  const guestName = String(body.guestName ?? "").trim();
+  const firstName = String(body.firstName ?? "").trim();
+  const lastName = String(body.lastName ?? "").trim();
+  const guestName = `${firstName} ${lastName}`.trim();
+  const preferredName = body.preferredName ? String(body.preferredName).trim() : null;
+  const notes = body.notes ? String(body.notes).trim() : null;
   const arrivalDate = String(body.arrivalDate ?? "");
   const departureDate = String(body.departureDate ?? "");
   const linkedBookingId = body.linkedBookingId ? Number(body.linkedBookingId) : null;
@@ -36,7 +42,7 @@ export async function POST(req: NextRequest) {
   // it auto-joined with another free Single in the same room.
   const partnerBedId = body.partnerBedId ? Number(body.partnerBedId) : null;
 
-  if (!guestName) return NextResponse.json({ error: "Guest name is required" }, { status: 400 });
+  if (!firstName) return NextResponse.json({ error: "First name is required" }, { status: 400 });
   if (!arrivalDate) return NextResponse.json({ error: "Arrival date is required" }, { status: 400 });
   if (!departureDate) return NextResponse.json({ error: "Departure date is required" }, { status: 400 });
   if (departureDate <= arrivalDate) {
@@ -63,7 +69,7 @@ export async function POST(req: NextRequest) {
   const booking = await db.transaction(async (tx) => {
     const [row] = await tx
       .insert(bookings)
-      .values({ guestName, arrivalDate, departureDate, linkedBookingId, bedId, dietariesTags, guestType })
+      .values({ guestName, firstName, lastName, preferredName, notes, arrivalDate, departureDate, linkedBookingId, bedId, dietariesTags, guestType })
       .returning();
 
     if (bedId != null && partnerBedId != null) {
@@ -72,6 +78,12 @@ export async function POST(req: NextRequest) {
     }
 
     return row;
+  });
+
+  await logChange({
+    category: "bookings",
+    action: "Created booking",
+    summary: `Created ${guestName}'s booking, ${formatDateUk(arrivalDate)} to ${formatDateUk(departureDate)}`,
   });
 
   return NextResponse.json(booking, { status: 201 });

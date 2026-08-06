@@ -1,178 +1,46 @@
 import { db } from "@/db";
-import { beds, bedLocations, bedSoloPeriods, bookings, joinedBeds, rooms } from "@/db/schema";
-import { and, eq } from "drizzle-orm";
+import { beds, bedLocations, bedSoloPeriods, bookings, events, joinedBeds, rooms } from "@/db/schema";
+import { and, eq, gte, lte } from "drizzle-orm";
 import { loadGridData } from "@/lib/grid-data";
 import type { RoomGridRow } from "@/lib/grid";
+import { nightsBetween } from "@/lib/dates";
 import type { ISODate } from "@/lib/occupancy";
 
-export interface LayoutCheckEntry {
-  label: string;
-  state: "occupied" | "empty";
-  count: number;
+export interface BedTypeCount {
+  bedType: string;
+  made: number;
+  total: number;
 }
 
-export interface RoomHousekeeping {
+export interface RoomBedCount {
   roomName: string;
-  floorName: string;
-  /** Bed/room-structure changes taking effect today — moves, joins, splits, solo switches. */
+  byType: BedTypeCount[];
+}
+
+export interface ArrivalEntry {
+  guestName: string;
+  roomName: string;
+}
+
+export interface DepartureEntry {
+  guestName: string;
+}
+
+/** "Family, day 1 of 3" — every event covering this date, not just ones starting/ending on it. */
+export interface OngoingEvent {
+  name: string;
+  dayOfEvent: number;
+  totalDays: number;
+}
+
+export interface HousekeepingSheet {
+  /** "Move 2 Singles from Ensuite 1 to Ashrami" — already netted, so a bed swapping back and forth for no real physical change never appears. */
   moverTasks: string[];
-  /** Expected end-of-day state, bed-type + occupied/empty counts. Only for
-   *  rooms that actually need checking today — see buildHousekeepingSheet. */
-  layoutCheck: LayoutCheckEntry[];
-}
-
-function bump(counts: Map<string, number>, key: string) {
-  counts.set(key, (counts.get(key) ?? 0) + 1);
-}
-
-function pluralize(label: string, count: number): string {
-  return count === 1 ? label : `${label}s`;
-}
-
-/** Turns tallied "label -> count" counts into structured entries, in a stable order. */
-function describeCounts(counts: Map<string, { label: string; state: string; count: number }>): LayoutCheckEntry[] {
-  return Array.from(counts.values())
-    .sort((a, b) => a.label.localeCompare(a.label) || a.state.localeCompare(b.state))
-    .map((c) => ({ label: pluralize(c.label, c.count), state: c.state as "occupied" | "empty", count: c.count }));
-}
-
-/** Per-room bed-type/occupied-empty tally for a single date, from the same grid the dorm board renders. */
-function buildLayoutCheck(grid: RoomGridRow[]): Map<number, LayoutCheckEntry[]> {
-  const byRoom = new Map<number, LayoutCheckEntry[]>();
-
-  for (const room of grid) {
-    const counts = new Map<string, { label: string; state: string; count: number }>();
-    const addCount = (label: string, state: string) => {
-      const key = `${label}|${state}`;
-      const existing = counts.get(key);
-      if (existing) existing.count += 1;
-      else counts.set(key, { label, state, count: 1 });
-    };
-
-    for (const unit of room.units) {
-      const firstCell = unit.slots[0]?.cells[0];
-      if (!firstCell || firstCell.state === "inactive") continue;
-
-      // Secondary half of a Solo Double (joined or native) contributes
-      // nothing of its own — it's not an independently bookable spot today.
-      if (firstCell.blockedBySoloJoin) continue;
-
-      const soloMerged = unit.soloByDate?.[0] === true || (firstCell.joinBadge?.mode === "solo" && firstCell.joinBadge.isPrimary);
-      if (soloMerged) {
-        addCount(`${unit.label} (Solo Double)`, firstCell.state === "booked" ? "occupied" : "empty");
-        continue;
-      }
-
-      for (const slot of unit.slots) {
-        const cell = slot.cells[0];
-        if (!cell || cell.state === "inactive" || cell.blockedBySoloJoin) continue;
-        addCount(unit.label, cell.state === "booked" ? "occupied" : "empty");
-      }
-    }
-
-    byRoom.set(room.roomId, describeCounts(counts));
-  }
-
-  return byRoom;
-}
-
-export async function buildHousekeepingSheet(date: ISODate): Promise<RoomHousekeeping[]> {
-  const [gridData, roomRows, bedRows, movedInToday, joinsStartingToday, joinsEndingToday, soloStartingToday, soloEndingToday, arrivingToday] =
-    await Promise.all([
-      loadGridData(date, 1),
-      db.select().from(rooms),
-      db.select().from(beds),
-      db.select().from(bedLocations).where(eq(bedLocations.startDate, date)),
-      db.select().from(joinedBeds).where(eq(joinedBeds.startDate, date)),
-      db.select().from(joinedBeds).where(eq(joinedBeds.endDate, date)),
-      db.select().from(bedSoloPeriods).where(eq(bedSoloPeriods.startDate, date)),
-      db.select().from(bedSoloPeriods).where(eq(bedSoloPeriods.endDate, date)),
-      db.select().from(bookings).where(eq(bookings.arrivalDate, date)),
-    ]);
-
-  const roomNameById = new Map(roomRows.map((r) => [r.id, r.name]));
-  const bedTypeById = new Map(bedRows.map((b) => [b.id, b.type]));
-  const layoutByRoom = buildLayoutCheck(gridData.grid);
-
-  const moverTasksByRoom = new Map<number, string[]>();
-  const addMover = (roomId: number | null, text: string) => {
-    if (roomId == null) return;
-    const list = moverTasksByRoom.get(roomId) ?? [];
-    list.push(text);
-    moverTasksByRoom.set(roomId, list);
-  };
-
-  // Bed moves: a bed_locations row starting today, paired with the segment
-  // for that same bed that ended exactly today — if there's no such prior
-  // segment, this is the bed's very first placement, not a "move".
-  for (const seg of movedInToday) {
-    const [prev] = await db
-      .select()
-      .from(bedLocations)
-      .where(and(eq(bedLocations.bedId, seg.bedId), eq(bedLocations.endDate, date)));
-    // Same room on both sides of the split isn't a physical move (e.g. a
-    // location row that got split for bookkeeping reasons without the bed
-    // actually going anywhere) — nothing for housekeeping to lift.
-    if (!prev || prev.roomId === seg.roomId) continue;
-    const bedType = bedTypeById.get(seg.bedId) ?? "bed";
-    const fromRoom = roomNameById.get(prev.roomId) ?? "unknown room";
-    const toRoom = roomNameById.get(seg.roomId) ?? "unknown room";
-    addMover(prev.roomId, `Move 1 ${bedType} to ${toRoom}`);
-    addMover(seg.roomId, `Receive 1 ${bedType} from ${fromRoom}`);
-  }
-
-  for (const j of joinsStartingToday) {
-    const bed1Type = bedTypeById.get(j.bed1Id) ?? "single";
-    const bed2Type = bedTypeById.get(j.bed2Id) ?? "single";
-    const roomId = movedInToday.find((s) => s.bedId === j.bed1Id)?.roomId ?? (await currentRoomIdFor(j.bed1Id, date));
-    const verb = j.mode === "solo" ? "join as a Solo Double" : "join and make as a double";
-    addMover(roomId, `Join 1 ${bed1Type} and 1 ${bed2Type} — ${verb}`);
-  }
-
-  for (const j of joinsEndingToday) {
-    const bed1Type = bedTypeById.get(j.bed1Id) ?? "single";
-    const bed2Type = bedTypeById.get(j.bed2Id) ?? "single";
-    const roomId = await currentRoomIdFor(j.bed1Id, date);
-    addMover(roomId, `Split joined ${bed1Type}/${bed2Type} back into singles`);
-  }
-
-  for (const s of soloStartingToday) {
-    const bedType = bedTypeById.get(s.bedId) ?? "bed";
-    const roomId = await currentRoomIdFor(s.bedId, date);
-    addMover(roomId, `Switch ${bedType} to Solo Double`);
-  }
-
-  for (const s of soloEndingToday) {
-    const bedType = bedTypeById.get(s.bedId) ?? "bed";
-    const roomId = await currentRoomIdFor(s.bedId, date);
-    addMover(roomId, `Switch ${bedType} back to Couple`);
-  }
-
-  // Beds are made up on arrival day (linen delivery timing means a
-  // departure-day changeover can't be relied on), so the layout check only
-  // needs to cover rooms that actually need eyes on them today: somewhere
-  // is arriving (bed must be made and ready), or the room's physical setup
-  // just changed (move/join/split/solo-switch, already in moverTasksByRoom).
-  // Every other occupied-but-unchanged room is identical to yesterday's
-  // check and isn't worth re-listing.
-  const needsCheckRoomIds = new Set(moverTasksByRoom.keys());
-  for (const b of arrivingToday) {
-    if (b.bedId == null) continue;
-    const roomId = await currentRoomIdFor(b.bedId, date);
-    if (roomId != null) needsCheckRoomIds.add(roomId);
-  }
-
-  const result: RoomHousekeeping[] = roomRows
-    .filter((r) => !r.excludeFromCapacity)
-    .map((r) => ({
-      roomName: r.name,
-      floorName: "",
-      moverTasks: moverTasksByRoom.get(r.id) ?? [],
-      layoutCheck: needsCheckRoomIds.has(r.id) ? layoutByRoom.get(r.id) ?? [] : [],
-    }))
-    .filter((r) => r.moverTasks.length > 0 || r.layoutCheck.length > 0);
-
-  return result;
+  arrivals: ArrivalEntry[];
+  departures: DepartureEntry[];
+  eventsOngoing: OngoingEvent[];
+  /** Only rooms with at least one arrival today — see buildHousekeepingSheet. */
+  roomsToMake: RoomBedCount[];
 }
 
 /** Whatever room a bed sits in as of `date`, per bed_locations. */
@@ -185,4 +53,296 @@ async function currentRoomIdFor(bedId: number, date: ISODate): Promise<number | 
   const rows = await db.select().from(bedLocations).where(eq(bedLocations.bedId, bedId));
   const active = rows.find((r) => r.startDate <= date && (r.endDate == null || r.endDate > date));
   return active?.roomId ?? null;
+}
+
+/**
+ * Physical bed count per room, broken down by the type housekeeping actually
+ * makes up — a joined Couple Double (mode "double") is dressed and counted
+ * as ONE double bed, but a Solo Double (mode "solo") is still two separate
+ * single mattresses physically, just sold as one spot, so both halves keep
+ * counting as "Single" here (mirrors housekeepingBedType's own fold, which
+ * only relabels mode "double" joins). Unlike countRoomSpots (guest capacity
+ * — a solo-merged pair is ONE spot), this is "how many beds are there to
+ * make", which doesn't collapse on solo mode.
+ */
+function countRoomSpotsByType(grid: RoomGridRow[]): Map<number, Map<string, number>> {
+  const byRoom = new Map<number, Map<string, number>>();
+  for (const room of grid) {
+    const byType = new Map<string, number>();
+    const seenPairs = new Set<string>();
+    for (const unit of room.units) {
+      const cell = unit.slots[0]?.cells[0];
+      if (!cell || cell.state === "inactive") continue;
+
+      if (unit.partnerUnitKey != null && cell.joinBadge?.mode === "double") {
+        const pairKey = [unit.key, unit.partnerUnitKey].sort().join("|");
+        if (seenPairs.has(pairKey)) continue;
+        seenPairs.add(pairKey);
+        byType.set("Double", (byType.get("Double") ?? 0) + 1);
+        continue;
+      }
+
+      byType.set(unit.label, (byType.get(unit.label) ?? 0) + 1);
+    }
+    byRoom.set(room.roomId, byType);
+  }
+  return byRoom;
+}
+
+/**
+ * Every bed-location segment that started today, paired with the segment
+ * for that same bed ending today — that pairing is what makes it a real
+ * move (a location row starting today with no such predecessor is the
+ * bed's very first placement, not a move; same room on both sides is a
+ * bookkeeping split, nobody carries anything).
+ */
+async function collectRawMoves(date: ISODate): Promise<{ bedId: number; bedType: string; fromRoomId: number; toRoomId: number }[]> {
+  const [movedInToday, bedTypeRows] = await Promise.all([
+    db.select().from(bedLocations).where(eq(bedLocations.startDate, date)),
+    db.select().from(beds),
+  ]);
+  const bedTypeById = new Map(bedTypeRows.map((b) => [b.id, b.type]));
+
+  const raw: { bedId: number; bedType: string; fromRoomId: number; toRoomId: number }[] = [];
+  for (const seg of movedInToday) {
+    const [prev] = await db
+      .select()
+      .from(bedLocations)
+      .where(and(eq(bedLocations.bedId, seg.bedId), eq(bedLocations.endDate, date)));
+    if (!prev || prev.roomId === seg.roomId) continue;
+    raw.push({ bedId: seg.bedId, bedType: bedTypeById.get(seg.bedId) ?? "bed", fromRoomId: prev.roomId, toRoomId: seg.roomId });
+  }
+  return raw;
+}
+
+/**
+ * What matters to whoever's carrying beds isn't the literal chain of
+ * bed_locations rows the database recorded, it's each room's NET count
+ * change for the day — physically, a bed is interchangeable with any other
+ * of the same type, so "Ensuite 1 → Infirmary" followed by "Infirmary →
+ * Ashrami" is indistinguishable from "Ensuite 1 → Ashrami" (Infirmary's own
+ * count never actually changed; it was just a way-station in the data).
+ * Netting only OPPOSITE-DIRECTION pairs between the same two rooms (the
+ * previous approach) missed exactly that chain case. This instead nets to a
+ * single count per (bedType, room) — negative means that room gave beds
+ * away today, positive means it received them — then greedily pairs off
+ * whichever rooms are short against whichever are over, independent of
+ * which specific room-to-room hops the data happened to record.
+ */
+function netMoves(raw: { bedType: string; fromRoomId: number; toRoomId: number }[], roomNameById: Map<number, string>): string[] {
+  const netByTypeRoom = new Map<string, number>();
+  const bump = (bedType: string, roomId: number, delta: number) => {
+    const key = `${bedType}|${roomId}`;
+    netByTypeRoom.set(key, (netByTypeRoom.get(key) ?? 0) + delta);
+  };
+  for (const m of raw) {
+    bump(m.bedType, m.fromRoomId, -1);
+    bump(m.bedType, m.toRoomId, 1);
+  }
+
+  const byType = new Map<string, { roomId: number; net: number }[]>();
+  for (const [key, net] of netByTypeRoom) {
+    if (net === 0) continue;
+    const [bedType, roomIdStr] = key.split("|");
+    const list = byType.get(bedType) ?? [];
+    list.push({ roomId: Number(roomIdStr), net });
+    byType.set(bedType, list);
+  }
+
+  const tasks: { bedType: string; fromRoomId: number; toRoomId: number; count: number }[] = [];
+  for (const [bedType, rooms] of byType) {
+    const sources = rooms
+      .filter((r) => r.net < 0)
+      .map((r) => ({ roomId: r.roomId, remaining: -r.net }))
+      .sort((a, b) => (roomNameById.get(a.roomId) ?? "").localeCompare(roomNameById.get(b.roomId) ?? ""));
+    const sinks = rooms
+      .filter((r) => r.net > 0)
+      .map((r) => ({ roomId: r.roomId, remaining: r.net }))
+      .sort((a, b) => (roomNameById.get(a.roomId) ?? "").localeCompare(roomNameById.get(b.roomId) ?? ""));
+
+    let si = 0;
+    let ti = 0;
+    while (si < sources.length && ti < sinks.length) {
+      const source = sources[si];
+      const sink = sinks[ti];
+      const count = Math.min(source.remaining, sink.remaining);
+      tasks.push({ bedType, fromRoomId: source.roomId, toRoomId: sink.roomId, count });
+      source.remaining -= count;
+      sink.remaining -= count;
+      if (source.remaining === 0) si += 1;
+      if (sink.remaining === 0) ti += 1;
+    }
+  }
+
+  return tasks
+    .sort((a, b) => (roomNameById.get(a.fromRoomId) ?? "").localeCompare(roomNameById.get(b.fromRoomId) ?? ""))
+    .map((t) => {
+      const fromName = roomNameById.get(t.fromRoomId) ?? "unknown room";
+      const toName = roomNameById.get(t.toRoomId) ?? "unknown room";
+      const label = t.count === 1 ? t.bedType : `${t.bedType}s`;
+      return `Move ${t.count} ${label} from ${fromName} to ${toName}`;
+    });
+}
+
+export async function buildHousekeepingSheet(date: ISODate): Promise<HousekeepingSheet> {
+  const [
+    gridData,
+    roomRows,
+    bedRows,
+    joinsStartingToday,
+    joinsEndingToday,
+    soloStartingToday,
+    soloEndingToday,
+    arrivingToday,
+    departingToday,
+    eventsOngoingToday,
+    rawMoves,
+  ] = await Promise.all([
+    loadGridData(date, 1),
+    db.select().from(rooms),
+    db.select().from(beds),
+    db.select().from(joinedBeds).where(eq(joinedBeds.startDate, date)),
+    db.select().from(joinedBeds).where(eq(joinedBeds.endDate, date)),
+    db.select().from(bedSoloPeriods).where(eq(bedSoloPeriods.startDate, date)),
+    db.select().from(bedSoloPeriods).where(eq(bedSoloPeriods.endDate, date)),
+    db.select().from(bookings).where(eq(bookings.arrivalDate, date)),
+    db.select().from(bookings).where(eq(bookings.departureDate, date)),
+    // Every event COVERING this date, not just ones starting/ending on it —
+    // the Daily Sheet shows "Family, day 2 of 5" for the whole run, not just
+    // the two boundary days.
+    db.select().from(events).where(and(lte(events.startDate, date), gte(events.endDate, date))),
+    collectRawMoves(date),
+  ]);
+
+  // A join row whose endDate isn't strictly after its startDate is
+  // degenerate (never actually active for any date — coversDate would
+  // always reject it) — most likely a leftover from a since-corrected
+  // edit. Filtering it out here, rather than trusting the raw
+  // startDate/endDate equality queries above, stops a stale row like that
+  // from spuriously reporting a "make/break down a double" event on its
+  // nominal startDate.
+  const joinsStartingTodayValid = joinsStartingToday.filter((j) => j.endDate == null || j.endDate > j.startDate);
+  const joinsEndingTodayValid = joinsEndingToday.filter((j) => j.endDate != null && j.endDate > j.startDate);
+
+  const roomNameById = new Map(roomRows.map((r) => [r.id, r.name]));
+  const bedTypeById = new Map(bedRows.map((b) => [b.id, b.type]));
+  const spotsByRoomType = countRoomSpotsByType(gridData.grid);
+  // Joins that neither start nor end today but are still active need
+  // checking too, for the arrivals bed-type fold — cheap enough to just
+  // pull them all rather than reason about which subset might matter.
+  const allJoins = await db.select().from(joinedBeds).where(eq(joinedBeds.mode, "double"));
+
+  function housekeepingBedType(bedId: number | null): string {
+    if (bedId == null) return "bed";
+    const raw = bedTypeById.get(bedId) ?? "bed";
+    if (raw.toLowerCase() !== "single") return raw;
+    // Solo vs Couple Double is a booking/pricing distinction only — to
+    // housekeeping it's the same double sheet + duvet either way.
+    const joined = allJoins.some((j) => (j.bed1Id === bedId || j.bed2Id === bedId) && j.startDate <= date && (j.endDate == null || j.endDate > date));
+    return joined ? "Double" : "Single";
+  }
+
+  // Strictly literal room-to-room bed carries only — a join/split doesn't
+  // carry a bed anywhere, so that work lives entirely in Beds to Make below,
+  // never here.
+  const moverTasks = netMoves(rawMoves, roomNameById);
+
+  // Solo <-> Couple switches never change what housekeeping actually does
+  // (still a made-up double either way) — deliberately not counted as "made"
+  // work; the room's already-made double just changes who it's sold to,
+  // nothing physical happens today.
+  void soloStartingToday;
+  void soloEndingToday;
+
+  const arrivals: ArrivalEntry[] = [];
+  for (const b of arrivingToday) {
+    const roomId = b.bedId != null ? await currentRoomIdFor(b.bedId, date) : null;
+    arrivals.push({
+      guestName: b.guestName,
+      roomName: roomId != null ? roomNameById.get(roomId) ?? "Unassigned" : "Unassigned",
+    });
+  }
+  arrivals.sort((a, b) => a.roomName.localeCompare(b.roomName) || a.guestName.localeCompare(b.guestName));
+
+  const departures: DepartureEntry[] = departingToday
+    .map((b) => ({ guestName: b.guestName }))
+    .sort((a, b) => a.guestName.localeCompare(b.guestName));
+
+  // Beds to Make, broken down by type — an arrival into a bed is "made" work
+  // for whatever type that bed folds to today (Double if it's part of an
+  // active Couple Double join, else its own raw type). A join starting today
+  // with no accompanying arrival (an existing guest's beds get pushed
+  // together mid-stay) is ALSO made work — one Double — unless an arrival on
+  // one of its two beds already counted it via the fold above. A join ending
+  // today un-makes the double back into two singles, which is equally real
+  // work the other direction.
+  const madeByRoomType = new Map<number, Map<string, number>>();
+  function addMade(roomId: number, bedType: string, count = 1) {
+    const forRoom = madeByRoomType.get(roomId) ?? new Map<string, number>();
+    forRoom.set(bedType, (forRoom.get(bedType) ?? 0) + count);
+    madeByRoomType.set(roomId, forRoom);
+  }
+
+  const arrivalBedIds = new Set(arrivingToday.map((b) => b.bedId).filter((id): id is number => id != null));
+  // Two guests arriving the same day into the two HALVES of the same Couple
+  // Double (one booking per underlying single bed) is still only ONE
+  // physical bed made up — without this, each arrival independently folds
+  // to "Double" and the pair gets counted twice ("2 of 1", nonsensical).
+  const countedDoublePairs = new Set<string>();
+  for (const b of arrivingToday) {
+    const roomId = b.bedId != null ? await currentRoomIdFor(b.bedId, date) : null;
+    if (roomId == null) continue;
+    const bedType = housekeepingBedType(b.bedId);
+    if (bedType === "Double" && b.bedId != null) {
+      const join = allJoins.find(
+        (j) => (j.bed1Id === b.bedId || j.bed2Id === b.bedId) && j.startDate <= date && (j.endDate == null || j.endDate > date)
+      );
+      if (join) {
+        const pairKey = [join.bed1Id, join.bed2Id].sort((a, c) => a - c).join("-");
+        if (countedDoublePairs.has(pairKey)) continue;
+        countedDoublePairs.add(pairKey);
+      }
+    }
+    addMade(roomId, bedType);
+  }
+  for (const j of joinsStartingTodayValid) {
+    if (j.mode !== "double") continue;
+    if (arrivalBedIds.has(j.bed1Id) || arrivalBedIds.has(j.bed2Id)) continue; // already folded into "Double" above
+    const roomId = rawMoves.find((m) => m.bedId === j.bed1Id)?.toRoomId ?? (await currentRoomIdFor(j.bed1Id, date));
+    if (roomId == null) continue;
+    addMade(roomId, "Double");
+  }
+  for (const j of joinsEndingTodayValid) {
+    if (j.mode !== "double") continue;
+    const roomId = await currentRoomIdFor(j.bed1Id, date);
+    if (roomId == null) continue;
+    addMade(roomId, "Single", 2);
+  }
+
+  const roomsToMake: RoomBedCount[] = [...madeByRoomType.entries()]
+    .map(([roomId, madeMap]) => {
+      const totalMap = spotsByRoomType.get(roomId) ?? new Map<string, number>();
+      const types = new Set([...madeMap.keys(), ...totalMap.keys()]);
+      const byType = [...types]
+        .map((bedType) => ({
+          bedType,
+          made: madeMap.get(bedType) ?? 0,
+          total: totalMap.get(bedType) ?? madeMap.get(bedType) ?? 0,
+        }))
+        .sort((a, b) => a.bedType.localeCompare(b.bedType));
+      return { roomName: roomNameById.get(roomId) ?? "unknown room", byType };
+    })
+    .sort((a, b) => a.roomName.localeCompare(b.roomName));
+
+  return {
+    moverTasks,
+    arrivals,
+    departures,
+    eventsOngoing: eventsOngoingToday.map((e) => ({
+      name: e.name,
+      dayOfEvent: nightsBetween(e.startDate, date) + 1,
+      totalDays: nightsBetween(e.startDate, e.endDate) + 1,
+    })),
+    roomsToMake,
+  };
 }

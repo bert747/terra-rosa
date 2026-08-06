@@ -7,6 +7,9 @@ export interface ConfirmModalState {
   message: string;
   confirmLabel: string;
   onConfirm: () => Promise<void> | void;
+  /** Optional second action button, rendered between Cancel and the primary confirm button — for a genuine 3-way choice (e.g. "This segment" vs "All segments") rather than a plain yes/no. */
+  secondaryLabel?: string;
+  onSecondary?: () => Promise<void> | void;
 }
 
 /**
@@ -20,9 +23,18 @@ export default function ConfirmModal({ state, onClose }: { state: ConfirmModalSt
 
   if (!state) return null;
 
-  async function handleConfirm() {
+  async function handleConfirm(e: React.FormEvent) {
+    e.preventDefault();
     setSaving(true);
     await state!.onConfirm();
+    setSaving(false);
+    onClose();
+  }
+
+  async function handleSecondary() {
+    if (!state?.onSecondary) return;
+    setSaving(true);
+    await state.onSecondary();
     setSaving(false);
     onClose();
   }
@@ -34,16 +46,25 @@ export default function ConfirmModal({ state, onClose }: { state: ConfirmModalSt
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div className="tr-modal">
+      {/* A <form> so the confirm button — type="submit", autoFocused — is
+          this dialog's default action: pressing Enter anywhere in it
+          confirms, same as clicking the button, without needing a focused
+          input to submit against. */}
+      <form className="tr-modal" onSubmit={handleConfirm}>
         <h2 style={{ marginTop: 0, fontSize: 16 }}>{state.title}</h2>
         <p style={{ marginBottom: 16 }}>{state.message}</p>
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
-          <button type="button" onClick={onClose} disabled={saving}>Cancel</button>
-          <button type="button" className="primary" onClick={handleConfirm} disabled={saving}>
+          <button type="button" className="tr-btn-soft" onClick={onClose} disabled={saving}>Cancel</button>
+          {state.secondaryLabel && (
+            <button type="button" onClick={handleSecondary} disabled={saving}>
+              {state.secondaryLabel}
+            </button>
+          )}
+          <button type="submit" className="primary" autoFocus disabled={saving}>
             {saving ? "Working…" : state.confirmLabel}
           </button>
         </div>
-      </div>
+      </form>
     </div>
   );
 }

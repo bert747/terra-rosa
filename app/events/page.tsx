@@ -5,6 +5,8 @@ import { useSearchParams } from "next/navigation";
 import { formatDateUk } from "@/lib/dates";
 import { addDays } from "@/lib/occupancy";
 import DateField from "@/components/DateField";
+import HelpButton from "@/components/HelpButton";
+import ConfirmModal, { type ConfirmModalState } from "@/components/ConfirmModal";
 
 function todayIso(): string {
   return new Date().toISOString().slice(0, 10);
@@ -29,6 +31,7 @@ export default function EventsPage() {
   const [error, setError] = useState<string | null>(null);
   const [form, setForm] = useState(defaultForm);
   const [editingId, setEditingId] = useState<number | null>(null);
+  const [confirmState, setConfirmState] = useState<ConfirmModalState | null>(null);
 
   async function load() {
     const rows = (await fetch("/api/events").then((r) => r.json())) as EventRow[];
@@ -74,19 +77,25 @@ export default function EventsPage() {
     load();
   }
 
-  async function deleteEvent(eventId: number) {
-    setError(null);
-    if (!window.confirm("Delete this event?")) return;
-    const res = await fetch(`/api/events/${eventId}`, { method: "DELETE" });
-    if (!res.ok) {
-      setError((await res.json()).error ?? "Could not delete event.");
-      return;
-    }
-    if (editingId === eventId) {
-      setEditingId(null);
-      setForm(defaultForm());
-    }
-    load();
+  function deleteEvent(eventId: number) {
+    setConfirmState({
+      title: "Delete event?",
+      message: "This can't be undone.",
+      confirmLabel: "Delete",
+      onConfirm: async () => {
+        setError(null);
+        const res = await fetch(`/api/events/${eventId}`, { method: "DELETE" });
+        if (!res.ok) {
+          setError((await res.json()).error ?? "Could not delete event.");
+          return;
+        }
+        if (editingId === eventId) {
+          setEditingId(null);
+          setForm(defaultForm());
+        }
+        load();
+      },
+    });
   }
 
   function beginEdit(ev: EventRow) {
@@ -106,10 +115,12 @@ export default function EventsPage() {
 
   return (
     <div className="tr-shell">
-      <h1 style={{ fontSize: 18, marginBottom: 4 }}>Events / retreat periods</h1>
-      <p className="tr-muted" style={{ fontSize: 12, marginTop: 0, marginBottom: 12 }}>
-        Anything added here shows as a band across the top of the <a href="/grid">grid</a> for the days it covers. The end date is <strong>inclusive</strong> — an event from the 1st to the 7th covers seven days, the last of them the 7th.
-      </p>
+      <h1 style={{ fontSize: 18, marginBottom: 12 }}>Events / retreat periods</h1>
+      <HelpButton title="Using Events">
+        Anything added here shows as a band across the top of the <a href="/grid">grid</a> for the days it covers.
+        The end date is <strong>inclusive</strong> — an event from the 1st to the 7th covers seven days, the last of
+        them the 7th.
+      </HelpButton>
       {error && <p className="tr-badge tr-badge-warn" style={{ marginBottom: 12 }}>{error}</p>}
 
       <div className="tr-card">
@@ -130,7 +141,7 @@ export default function EventsPage() {
                 <td>{ev.name}</td>
                 <td>{formatDateUk(ev.startDate)}</td>
                 <td>{formatDateUk(ev.endDate)}</td>
-                <td className="tr-muted tr-cell-clip" title={ev.notes ?? ""}>{ev.notes ?? ""}</td>
+                <td className="tr-muted tr-cell-clip" data-tooltip={ev.notes ?? ""}>{ev.notes ?? ""}</td>
                 <td className="tr-col-actions">
                   <button type="button" onClick={() => beginEdit(ev)}>
                     Edit
@@ -175,6 +186,8 @@ export default function EventsPage() {
           )}
         </form>
       </div>
+
+      <ConfirmModal state={confirmState} onClose={() => setConfirmState(null)} />
     </div>
   );
 }

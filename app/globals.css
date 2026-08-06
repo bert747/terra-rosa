@@ -15,13 +15,29 @@
   --tr-border-strong: #b7a98d;
   --tr-text: #2f3b2e;
   --tr-text-muted: #6d715a;
-  --tr-accent: #5b7147;
-  --tr-accent-soft: #e7efd9;
+  /* Terra Rosa's brand pink (from the logo mark), toned to this app's
+     muted/utilitarian palette rather than the logo's full vivid
+     saturation — drives buttons, links, menus, focus rings, checkboxes.
+     Booking pills in the grid deliberately do NOT use this token (see
+     .tr-grid-booking-pill's own hardcoded green) — bookings stay green
+     regardless of the UI chrome's accent colour. */
+  --tr-accent: #b1476b;
+  --tr-accent-soft: #f6dfe6;
   --tr-accent-contrast: #fcf8f2;
   --tr-warn-bg: #f8e8db;
   --tr-warn-text: #8d4d2f;
   --tr-ok-bg: #e8efe0;
   --tr-ok-text: #4a6741;
+  /* Single source of truth for every "this is just a normal booking" shade
+     in the grid — the pill's own fill/border AND the "valid move" drag-ghost
+     both derive from this one value via color-mix(), so re-theming bookings
+     later only ever means changing this one line. A warm grey-brown,
+     deliberately independent of --tr-accent (the general pink UI chrome) —
+     see the note on --tr-accent above. Semantic drag states (amber
+     swap/red invalid/blue shares-bed) are NOT derived from this — those
+     mean something specific and shouldn't drift with a booking re-theme. */
+  --tr-booking-color: #8a7360;
+  --tr-booking-fill: color-mix(in srgb, var(--tr-booking-color) 24%, white);
   /* Dashed bed-divider colour (coupled/native-double seam), read at 50%
      opacity by .tr-grid-divider-dashed so it stays soft. Solid dividers use
      --tr-border directly instead (see .tr-grid-divider-solid) — they need
@@ -90,7 +106,7 @@ input:focus,
 select:focus,
 textarea:focus {
   border-color: var(--tr-accent);
-  box-shadow: 0 0 0 3px rgba(91, 113, 71, 0.14);
+  box-shadow: 0 0 0 3px rgba(177, 71, 107, 0.14);
 }
 
 textarea {
@@ -116,6 +132,13 @@ button.primary {
   background: var(--tr-accent);
   color: var(--tr-accent-contrast);
   border-color: var(--tr-accent);
+}
+
+/** The secondary/"cancel" side of a primary action — pale accent fill with accent-coloured text, so it still reads as part of the same colour family instead of a flat neutral grey. */
+button.tr-btn-soft {
+  background: var(--tr-accent-soft);
+  color: var(--tr-accent);
+  border-color: var(--tr-accent-soft);
 }
 
 button:hover {
@@ -155,10 +178,10 @@ button:hover {
   display: flex;
   width: 100%;
   gap: 12px;
-  align-items: center;
+  align-items: stretch;
   border-bottom: 1px solid var(--tr-border);
   background: #e8dfce;
-  padding: 10px 24px;
+  padding: 0 24px;
   position: sticky;
   top: 0;
   z-index: 40;
@@ -167,55 +190,74 @@ button:hover {
 .tr-nav-left {
   display: flex;
   gap: 12px;
-  align-items: center;
+  align-items: stretch;
   min-width: 0;
 }
 
 .tr-nav-back {
   min-width: 68px;
+  align-self: center;
 }
 
 .tr-nav-brand {
+  align-self: center;
   padding-bottom: 0;
   margin-right: 4px;
   font-size: 17px;
   letter-spacing: 0.02em;
 }
 
+/* Real browser-style tabs (Chrome tab strip), not pill buttons — the active
+   page's own name no longer needs repeating as an <h1> on every page (see
+   e.g. app/bookings/page.tsx) since the highlighted, "lifted" tab already
+   says which page you're on. Tabs stretch to the nav's own full height
+   (align-items: stretch above) so the active tab's bottom edge can sit
+   exactly on top of — and visually erase — the nav's own border-bottom
+   line at that one spot, the same illusion real browser tabs use to look
+   like they're part of the page below rather than the chrome above it. */
 .tr-tabs {
   display: flex;
-  gap: 6px;
+  gap: 2px;
   flex-wrap: wrap;
-  align-items: center;
+  align-items: flex-end;
 }
 
 .tr-tab {
-  padding: 7px 12px;
+  display: flex;
+  align-items: center;
+  margin-top: 9px;
+  padding: 8px 16px;
   font-size: 13px;
   color: var(--tr-text-muted);
   text-decoration: none;
   font-weight: 600;
-  background: #ddd2bf;
-  border: 1px solid var(--tr-border);
-  border-radius: 999px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-bottom: 1px solid var(--tr-border);
+  border-radius: 8px 8px 0 0;
 }
 
 .tr-tab:hover {
-  background: #efe6d6;
+  background: rgba(255, 255, 255, 0.4);
   color: var(--tr-text);
 }
 
 .tr-tab-active,
 .tr-tab-active:hover {
-  background: var(--tr-accent-soft);
+  background: var(--tr-bg);
   color: var(--tr-accent);
   font-weight: 700;
-  border-color: rgba(91, 113, 71, 0.44);
+  border-color: var(--tr-border) var(--tr-border) var(--tr-bg);
 }
 
 /* Keep the nav's own links (Log in) looking like plain links, not tabs. */
 .tr-user-menu {
   position: relative;
+  align-self: center;
+}
+
+.tr-nav > a {
+  align-self: center;
 }
 
 .tr-user-menu > summary {
@@ -321,9 +363,22 @@ button:hover {
   gap: 18px;
 }
 
+.tr-layout-columns {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+}
+
 .tr-inline-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.tr-inline-grid-3 {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
 }
 
@@ -370,7 +425,7 @@ button:hover {
 .tr-chip-active {
   background: var(--tr-accent-soft);
   color: var(--tr-accent);
-  border-color: rgba(91, 113, 71, 0.45);
+  border-color: rgba(177, 71, 107, 0.45);
 }
 
 .tr-tag-input {
@@ -388,7 +443,7 @@ button:hover {
 
 .tr-tag-input:focus-within {
   border-color: var(--tr-accent);
-  box-shadow: 0 0 0 3px rgba(91, 113, 71, 0.14);
+  box-shadow: 0 0 0 3px rgba(177, 71, 107, 0.14);
 }
 
 .tr-tag-pill {
@@ -419,7 +474,7 @@ button:hover {
 }
 
 .tr-tag-pill-remove:hover {
-  background: rgba(91, 113, 71, 0.22);
+  background: rgba(177, 71, 107, 0.22);
 }
 
 .tr-tag-input-field {
@@ -544,6 +599,209 @@ button:hover {
   padding: 10px 12px;
 }
 
+.tr-help-button {
+  width: 32px;
+  height: 32px;
+  min-height: unset;
+  border-radius: 50%;
+  padding: 0;
+  font-weight: 700;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.14);
+}
+
+.tr-help-popover {
+  width: min(360px, calc(100vw - 32px));
+  max-height: 50vh;
+  overflow-y: auto;
+  background: var(--tr-surface-strong);
+  border: 1px solid var(--tr-border-strong);
+  border-radius: 10px;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.16);
+  padding: 12px 14px;
+}
+
+.tr-help-popover-title {
+  font-weight: 700;
+  margin-bottom: 6px;
+}
+
+.tr-help-popover-body {
+  font-size: 13px;
+  color: var(--tr-text-muted);
+  line-height: 1.5;
+}
+
+.tr-actions-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--tr-accent);
+  color: var(--tr-accent-contrast);
+  font-size: 11px;
+  font-weight: 700;
+  margin-left: 4px;
+}
+
+/* Same shape as .tr-actions-badge, but for a count that's purely
+   informational (Planned Bed Moves) — not urgent the way Alerts' count is,
+   so it stays a plain neutral grey rather than the accent colour. */
+.tr-actions-badge-neutral {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--tr-border-strong);
+  color: var(--tr-text);
+  font-size: 11px;
+  font-weight: 700;
+  margin-left: 4px;
+}
+
+.tr-actions-menu {
+  width: min(420px, calc(100vw - 32px));
+  max-height: 60vh;
+  overflow-y: auto;
+  background: var(--tr-surface-strong);
+  border: 1px solid var(--tr-border-strong);
+  border-radius: 10px;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.16);
+  padding: 10px;
+}
+
+.tr-actions-menu-title {
+  display: flex;
+  align-items: center;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--tr-text-muted);
+  padding: 6px 4px;
+}
+
+.tr-actions-menu-title:not(:first-child) {
+  margin-top: 8px;
+  border-top: 1px solid var(--tr-border);
+  padding-top: 10px;
+}
+
+.tr-actions-menu-list {
+  margin: 0 0 4px;
+  padding: 0;
+  list-style: none;
+}
+
+.tr-actions-menu-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 4px;
+  font-size: 13px;
+  border-radius: 6px;
+}
+
+.tr-actions-menu-list li:hover {
+  background: var(--tr-accent-soft);
+}
+
+.tr-actions-menu-list li > *:first-child {
+  flex: 1;
+  min-width: 0;
+}
+
+/* The Display settings dropdown specifically — wider than a plain
+   .tr-actions-menu (see the grid's own gear button) since each row now
+   carries a side-by-side preview, not just a checkbox and two lines of
+   text. */
+.tr-settings-menu {
+  width: min(640px, calc(100vw - 32px));
+}
+
+/* A checkbox-driven settings row inside a .tr-actions-menu dropdown (see
+   the grid's own "Display settings" menu) — matches the hoverable/rounded
+   treatment .tr-actions-menu-list li already uses elsewhere in the same
+   dropdown family, since a plain unstyled <label>+<input> read as "not
+   styled at all" next to it. Row-level layout: checkbox, then label text,
+   then the live preview — side by side (see .tr-settings-preview), not
+   stacked, so a longer description doesn't push the preview far below
+   where the toggle that controls it is. */
+.tr-settings-toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 6px;
+  font-size: 13px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.tr-settings-toggle-row:hover {
+  background: var(--tr-accent-soft);
+}
+
+.tr-settings-toggle-row + .tr-settings-toggle-row {
+  border-top: 1px solid var(--tr-border);
+}
+
+.tr-settings-checkbox {
+  width: 16px;
+  height: 16px;
+  /* The generic `input { min-height: 40px; padding: 10px 12px; }` rule
+     (see top of this file) still applies to a checkbox unless explicitly
+     overridden here — min-height wins over the height set above, so
+     without this the box is actually 40px tall. Chromium/WebKit then draw
+     an accent-color-styled checkbox's native focus ring sized to that
+     full box, producing an oddly tall, blocky rectangle around a
+     visually tiny checkbox — not really an "outline" so much as the
+     native widget rendering itself into an oversized box. */
+  min-height: 16px;
+  padding: 0;
+  border: none;
+  accent-color: var(--tr-accent);
+  cursor: pointer;
+  flex: none;
+  /* A plain mouse click was still triggering Chromium's default focus
+     ring on the (correctly sized) checkbox — not just keyboard nav.
+     :focus-visible + a ring sized to the box itself replaces that with
+     something that only shows up for real keyboard focus. */
+  outline: none;
+}
+
+.tr-settings-checkbox:focus-visible {
+  outline: 2px solid var(--tr-accent);
+  outline-offset: 2px;
+}
+
+.tr-settings-toggle-label {
+  flex: 1;
+  min-width: 0;
+}
+
+/* A live, always-accurate mini render of what the toggle actually does —
+   reuses the real pill/tooltip classes rather than a static screenshot, so
+   it can never drift out of sync with the real thing and matches both
+   themes for free. Fixed width, sits to the RIGHT of the label rather than
+   below it. */
+.tr-settings-preview {
+  flex: none;
+  width: 260px;
+  padding: 10px;
+  border: 1px dashed var(--tr-border);
+  border-radius: 8px;
+  background: var(--tr-surface);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: visible;
+}
+
 .tr-stat {
   border: 1px solid var(--tr-border);
   border-radius: 10px;
@@ -620,7 +878,12 @@ button:hover {
   /* Per-room tint (set inline as --tr-room-label), falling back to plain
      surface for rows that aren't a room — summary rows, event lanes. */
   background-color: var(--tr-room-label, var(--tr-surface));
-  z-index: 1;
+  /* Must beat .tr-grid-booking-cell's z-index:2 — these are the frozen
+     left-hand columns, meant to always sit ON TOP of whatever booking pill
+     scrolls underneath them horizontally. At 1 they used to lose that
+     fight (a pill would paint over "Ashrami"/"Single" as it scrolled
+     under), which read as booking pills "floating over" the room labels. */
+  z-index: 3;
 }
 
 .tr-grid-room {
@@ -715,7 +978,7 @@ button:hover {
 
 .tr-grid-drop-shadow {
   background-image: linear-gradient(rgba(122, 59, 46, 0.24), rgba(122, 59, 46, 0.24));
-  outline: 2px dashed var(--tr-accent);
+  outline: 2px dashed var(--tr-booking-color);
   outline-offset: -2px;
 }
 
@@ -734,6 +997,44 @@ button:hover {
      (needed elsewhere, e.g. so long room names don't spill) is overridden
      here for booking cells specifically. */
   overflow: visible;
+  /* A booking's right edge bleeds -3px into the NEXT <td>'s own padding
+     (.tr-pill-continues-end, always on) so it visually fuses with that
+     cell's departing tail. Without an explicit z-index here, that next
+     <td> — later in DOM order — paints (and hit-tests) OVER those bled
+     pixels, since z-index:auto siblings stack in tree order: the pill's own
+     z-index:2 only wins within ITS OWN <td>'s stacking context, not against
+     a sibling <td>'s unrelated content. The last few pixels of a booking's
+     pill were unclickable and showed the next cell's hover highlight
+     instead — this lifts the whole cell (and everything bled out of it)
+     above any plain sibling cell. The left-bleed case (.tr-pill-continues-
+     start, into the PREVIOUS cell) never had this problem: an earlier
+     sibling already paints underneath in DOM order with no help needed.
+     MUST be 2, not 1: giving this <td> ANY explicit z-index makes it a new
+     stacking context, which traps the pill's own z-index:2 inside it —
+     the pill no longer competes directly against a SIBLING <td>'s content
+     at the outer level, only this <td> itself does. .tr-grid-departing-tail
+     (z-index:1, in the very next <td>, which has no z-index of its own and
+     so "escapes" upward to compete at the outer level) would then tie with
+     this <td> at z-index:1 and win on DOM order alone — silently covering
+     the last letter or two of an overflowing guest name again (see that
+     class's own comment for the original bug this was fixing). z-index:2
+     keeps this <td> above that escaped z-index:1 tail as well. */
+  z-index: 2;
+}
+
+/* A short (e.g. same-day-turnover) pill's trailing » split-sibling nav icon
+   (margin-left: auto — see .tr-grid-pill-split-nav) can bleed past THIS
+   <td>'s own boundary further than the plain 3px .tr-pill-continues-end
+   case above accounts for. When the next date's cell is ALSO a real
+   booking-cell (its own z-index: 2 — very often true right here, since
+   this is exactly the same-day-turnover shape), the two tie at equal
+   z-index and the next one — later in DOM order — wins, painting over the
+   chevron entirely rather than just its last pixel or two. Bumped to
+   z-index: 3 (only applied via GridCanvas.tsx when this cell actually has
+   a trailing chevron to protect) so it wins outright instead of relying on
+   a tie-break that doesn't reliably go its way. */
+.tr-grid-booking-cell-split-tail {
+  z-index: 3;
 }
 
 .tr-grid-booking-pill {
@@ -769,18 +1070,65 @@ button:hover {
      booking must always read as one single flat colour across its whole
      span regardless, so the weekend tint is simply left off bookings
      entirely rather than chasing per-fragment position math. */
-  background-color: #d3ecd6;
-  border: 1px solid #9cc9a1;
+  background-color: var(--tr-booking-fill);
+  border: 1px solid var(--tr-booking-color);
   border-radius: 12px;
   color: var(--tr-text);
   text-decoration: none;
   font-size: 12px;
-  font-weight: 600;
+  /* Normal weight at the pill level — only the guest's own name (see
+     .tr-grid-pill-name) is actually bold. A uniformly-bold pill gave every
+     word equal weight, which buried the one piece of text staff actually
+     scan for (who's in this bed) among everything else (chevrons, the
+     "(same bed as X)" annotation) reading exactly as loud. */
+  font-weight: 400;
   white-space: nowrap;
 }
 
 .tr-grid-booking-pill:hover {
+  /* brightness(0.97) alone was barely perceptible — a real border colour
+     shift plus a soft lift reads as "this is now the hovered thing"
+     immediately, rather than requiring a careful side-by-side look. */
   filter: brightness(0.97);
+  border-color: var(--tr-text);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.18);
+}
+
+/* "Sleeps near"/"Shares bed with" isn't currently met — see
+   findAllocationIssues. A small icon rather than recolouring the whole
+   pill, so bookings still read as "a normal green booking" at a glance and
+   only this one detail flags for review. */
+.tr-grid-pill-alert {
+  flex: none;
+  font-size: 12px;
+  color: #b8860b;
+}
+
+/* Mirrors .tr-grid-pill-alert above for the MET case — a quiet, always-on
+   confirmation that a "Sleeps near"/"Shares bed with" relationship is
+   satisfied, distinct from the (togglable) full "(same bed as X)" text. */
+.tr-grid-pill-satisfied {
+  flex: none;
+  font-size: 11px;
+  opacity: 0.6;
+}
+
+/* Folded-corner "this booking has a note" marker — an Excel cell-comment
+   idiom (a small triangle in the corner) rather than showing the note text
+   itself, which would compete with the guest name for the pill's often-tiny
+   width. The pill (.tr-grid-booking-pill) is already `position: absolute`,
+   which makes it a containing block for this child too — top:0/right:0
+   here lands exactly on the pill's own corner, no extra offset needed. */
+.tr-grid-pill-note-corner {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 0;
+  height: 0;
+  border-style: solid;
+  border-width: 0 9px 9px 0;
+  border-color: transparent var(--tr-accent) transparent transparent;
+  z-index: 1;
 }
 
 /* Flat, border-less edge that bleeds -3px into the NEXT/PREVIOUS cell's own
@@ -847,12 +1195,107 @@ button:hover {
      box (see .tr-grid-booking-pill/.tr-grid-booking-cell above) reads the
      name in full rather than truncating to a useless "R..". */
   white-space: nowrap;
+  font-weight: 600;
+}
+
+/* "(same bed as X)" / "(same room as X)" — see GridBooking.relationship.
+   One point smaller than the guest's own name and NOT bold, except the
+   other guest's name itself (the one part worth re-scanning for), which
+   matches .tr-grid-pill-name's own weight so both names read at the same
+   visual "this is a person" level while the connecting words stay quiet. */
+.tr-grid-pill-relation {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--tr-text-muted);
+  white-space: nowrap;
+}
+
+.tr-grid-pill-relation strong {
+  font-weight: 600;
+  color: var(--tr-text);
 }
 
 .tr-grid-pill-chevron {
   color: var(--tr-text-muted);
   flex: none;
   font-size: 10px;
+}
+
+/* "Jump to the other part of this split booking" — a bold, oversized
+   chevron in the booking's own accent colour reads as a distinct,
+   deliberate control on its own (no box needed to prop it up — a boxed
+   9px glyph read as a tiny, easy-to-miss button). Bigger than the plain
+   window-scroll-cutoff chevron (.tr-grid-pill-chevron above) so the two
+   are never confused despite sharing a glyph family. */
+.tr-grid-pill-split-nav {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--tr-booking-color);
+  cursor: pointer;
+}
+
+.tr-grid-pill-split-nav:hover {
+  color: var(--tr-accent, var(--tr-booking-color));
+  transform: scale(1.15);
+}
+
+/* Momentary "look here" pulse — see flashHighlightBooking in
+   GridCanvas.tsx, fired when a split-sibling nav jump lands on its
+   target. Animates the pill's OWN border/shadow (not a full recolour) so
+   it stays legible mid-pulse instead of flashing to something unreadable. */
+.tr-grid-pill-flash {
+  animation: tr-pill-flash 0.5s ease-in-out 3;
+}
+
+@keyframes tr-pill-flash {
+  0%, 100% {
+    box-shadow: none;
+    border-color: var(--tr-booking-color);
+  }
+  50% {
+    box-shadow: 0 0 0 3px var(--tr-accent, #c2185b);
+    border-color: var(--tr-accent, #c2185b);
+  }
+}
+
+/* Held (not timed) version of the same idea — on while a split-sibling nav
+   icon is being hovered, so the OTHER part is obvious before you even
+   click. See setSiblingHoverHighlight/clearSiblingHoverHighlight. */
+.tr-grid-pill-hover-preview {
+  box-shadow: 0 0 0 3px var(--tr-accent, #c2185b);
+  border-color: var(--tr-accent, #c2185b);
+}
+
+/* A booking's main pill and its "checks out today" departing tail (see
+   .tr-grid-departing-tail) are two separate, overlapping boxes that read as
+   one continuous shape — a plain box-shadow ring on BOTH independently
+   draws two full rectangles, which shows up as a stray extra vertical line
+   right where they overlap (the checkout-date seam). These "-head"/"-tail"
+   variants (see applyPillHighlightClasses in GridCanvas.tsx, which only
+   uses them when a booking actually has a tail on screen) draw the ring on
+   three sides only, open on the seam side, so the two halves read as one
+   unbroken outline instead. Simulated with offset, zero-blur box-shadows
+   (each one a solid bar on a single side) since box-shadow has no native
+   per-side keyword. */
+.tr-grid-pill-hover-preview-head,
+.tr-grid-pill-flash-head {
+  border-color: var(--tr-accent, #c2185b);
+  box-shadow:
+    -3px 0 0 0 var(--tr-accent, #c2185b),
+    0 -3px 0 0 var(--tr-accent, #c2185b),
+    0 3px 0 0 var(--tr-accent, #c2185b);
+}
+.tr-grid-pill-hover-preview-tail,
+.tr-grid-pill-flash-tail {
+  border-color: var(--tr-accent, #c2185b);
+  box-shadow:
+    3px 0 0 0 var(--tr-accent, #c2185b),
+    0 -3px 0 0 var(--tr-accent, #c2185b),
+    0 3px 0 0 var(--tr-accent, #c2185b);
 }
 
 /* Bookings that don't count toward capacity (residents, guardians, workers). */
@@ -970,6 +1413,33 @@ button:hover {
   background-size: 448px 100%, 100% 2px;
 }
 
+/* Same "later rule wins the whole background-image property, not just the
+   layers it actually differs on" trap, one more time: a cell that's both
+   NOT PLACED here yet (.tr-grid-inactive, its own hatch pattern) and the
+   top row of a native pair/joined couple (.tr-grid-divider-dashed, always
+   on now — see that class) needs BOTH .tr-grid-inactive's hatch and this
+   combined rule to win over plain .tr-grid-divider-dashed alone (two
+   classes beats one at equal source order) — otherwise the top row of an
+   unplaced native double silently loses its hatching while every other
+   inactive cell in the room keeps it, which read as that one row already
+   being placed when it wasn't. The dashed seam itself is dropped here
+   deliberately: a cell with nothing placed on it yet has no real coupled
+   seam to hint at, so the hatch alone is the correct read. */
+.tr-grid-inactive.tr-grid-divider-dashed {
+  background-image:
+    var(--tr-weekend-image, none),
+    repeating-linear-gradient(
+      45deg,
+      #f0f0ec,
+      #f0f0ec 4px,
+      #e6e6e0 4px,
+      #e6e6e0 8px
+    );
+  background-position: var(--tr-weekend-pos, 0 0), 0 0;
+  background-size: 448px 100%, auto;
+  background-repeat: repeat-x, repeat;
+}
+
 /* A "Solo Double" cell spanning both of a joined pair's rows for one date —
    sold as a single spot, so it reads as one unit rather than two stacked
    bookable beds. It still takes the room's own tint (the same variable
@@ -1031,8 +1501,8 @@ button:hover {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(91, 113, 71, 0.22);
-  border: 2px dashed var(--tr-accent);
+  background: color-mix(in srgb, var(--tr-booking-color) 22%, transparent);
+  border: 2px dashed var(--tr-booking-color);
   border-radius: 12px;
   pointer-events: none;
 }
@@ -1047,7 +1517,7 @@ button:hover {
 }
 
 .tr-pill-resize-ghost-label {
-  background: var(--tr-accent);
+  background: var(--tr-booking-color);
   color: var(--tr-accent-contrast, #fff);
   font-size: 11px;
   font-weight: 700;
@@ -1076,13 +1546,18 @@ button:hover {
 }
 
 .tr-pill-move-ghost-valid {
-  background: rgba(91, 113, 71, 0.28);
-  border-color: var(--tr-accent);
+  background: color-mix(in srgb, var(--tr-booking-color) 28%, transparent);
+  border-color: var(--tr-booking-color);
 }
 
 .tr-pill-move-ghost-swap {
   background: rgba(184, 134, 11, 0.28);
   border-color: #b8860b;
+}
+
+.tr-pill-move-ghost-valid-shares {
+  background: rgba(46, 108, 163, 0.28);
+  border-color: #2e6ca3;
 }
 
 .tr-pill-move-ghost-invalid {
@@ -1134,12 +1609,17 @@ button:hover {
   font-weight: 700;
 }
 
-.tr-grid-cell:hover > a.tr-grid-new {
-  color: var(--tr-accent);
+/* Suppressed during a pan (see .tr-grid-panning) — pointer capture on the
+   viewport stops the browser from ever re-hit-testing to clear :hover on
+   whichever cell the drag started over, so without this it stays lit (and
+   its native title tooltip stuck showing) for the rest of the gesture and
+   often past it. */
+.tr-grid-viewport:not(.tr-grid-panning) .tr-grid-cell:hover > a.tr-grid-new {
+  color: var(--tr-booking-color);
 }
 
-.tr-grid-cell:has(> .tr-grid-new):hover {
-  outline: 2px solid var(--tr-accent);
+.tr-grid-viewport:not(.tr-grid-panning) .tr-grid-cell:has(> .tr-grid-new):hover {
+  outline: 2px solid var(--tr-booking-color);
   outline-offset: -2px;
   cursor: pointer;
 }
@@ -1150,9 +1630,28 @@ button:hover {
    (the same layout Google Calendar uses for all-day events).
    ------------------------------------------------------------------------- */
 
+/* Frozen under the header row — see HEADER_ROW_HEIGHT/GRID_ROW_HEIGHT in
+   GridCanvas.tsx, which set each cell's own `top` inline (varies per lane
+   index, so it can't be a single fixed CSS value). z-index:4 matches the
+   header's own date-column cells (.tr-grid thead th) so the events row
+   reads as part of that same frozen strip, above every scrolling room row
+   (including a booked cell's z-index:2 — see .tr-grid-booking-cell) but
+   below the header proper. The room/bed label cells within this row (see
+   .tr-grid-event-head below) need to out-rank BOTH axes at once — frozen
+   to the top of the viewport AND to the left of it simultaneously — so
+   they go one step higher again, at 5, matching the header's own corner
+   cells. */
 .tr-grid-event-lane > td {
   padding: 1px 2px;
   height: 26px;
+  position: sticky;
+  z-index: 4;
+  background-color: var(--tr-surface);
+}
+
+.tr-grid-event-lane > td.tr-grid-room,
+.tr-grid-event-lane > td.tr-grid-bed {
+  z-index: 5;
 }
 
 .tr-grid-group-row > td {
@@ -1319,6 +1818,193 @@ button:hover {
   padding: 18px;
 }
 
+.tr-room-picker-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  max-height: 220px;
+  overflow-y: auto;
+  border: 1px solid var(--tr-border);
+  border-radius: 8px;
+}
+
+.tr-room-picker-list li + li {
+  border-top: 1px solid var(--tr-border);
+}
+
+.tr-room-picker-list button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  border: none;
+  border-radius: 0;
+  background: none;
+  padding: 9px 12px;
+  font-size: 14px;
+  font-weight: 500;
+  text-align: left;
+}
+
+.tr-room-picker-list button:hover {
+  background: var(--tr-accent-soft);
+}
+
+.tr-room-picker-active {
+  background: var(--tr-accent-soft);
+  font-weight: 700 !important;
+}
+
+.tr-room-picker-back {
+  display: block;
+  background: none;
+  border: none;
+  padding: 0;
+  margin-bottom: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--tr-accent);
+}
+
+.tr-room-picker-selected {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border: 1px solid var(--tr-border);
+  border-radius: 8px;
+  padding: 9px 12px;
+  font-size: 14px;
+}
+
+.tr-room-picker-selected button {
+  min-height: unset;
+  padding: 3px 8px;
+  font-size: 12px;
+}
+
+.tr-columns-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+}
+
+.tr-columns-trigger-icon {
+  font-size: 18px;
+  line-height: 1;
+  opacity: 0.7;
+}
+
+.tr-columns-menu {
+  width: 240px;
+  background: var(--tr-surface-strong);
+  border: 1px solid var(--tr-border);
+  border-radius: 10px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.16);
+  padding: 6px;
+}
+
+.tr-columns-menu-title {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--tr-text-muted);
+  padding: 6px 8px 4px;
+}
+
+.tr-columns-menu-title:not(:first-child) {
+  margin-top: 4px;
+  border-top: 1px solid var(--tr-border);
+  padding-top: 10px;
+}
+
+.tr-columns-menu-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 8px;
+  font-size: 13px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.tr-columns-menu-item:hover {
+  background: var(--tr-accent-soft);
+}
+
+.tr-columns-menu-item-locked {
+  cursor: default;
+}
+
+.tr-columns-menu-item-locked:hover {
+  background: none;
+}
+
+.tr-columns-menu-item input[type="checkbox"] {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  margin: 0;
+  cursor: inherit;
+}
+
+.tr-checkbox {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  border: 1.5px solid var(--tr-border-strong, var(--tr-border));
+  background: var(--tr-surface);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  line-height: 1;
+  color: #fff;
+}
+
+.tr-checkbox-checked {
+  background: var(--tr-accent);
+  border-color: var(--tr-accent);
+}
+
+.tr-columns-menu-hint {
+  margin-left: auto;
+  font-size: 10px;
+  color: var(--tr-text-muted);
+  font-weight: 400;
+  white-space: nowrap;
+}
+
+.tr-toggle-group {
+  display: inline-flex;
+  border: 1px solid var(--tr-border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.tr-toggle {
+  min-height: unset;
+  padding: 5px 10px;
+  font-size: 12px;
+  border: none;
+  border-radius: 0;
+  background: var(--tr-surface);
+  color: var(--tr-text-muted);
+}
+
+.tr-toggle + .tr-toggle {
+  border-left: 1px solid var(--tr-border);
+}
+
+.tr-toggle.active {
+  background: var(--tr-accent-soft);
+  color: var(--tr-text);
+  font-weight: 600;
+}
+
 .tr-combobox {
   position: relative;
 }
@@ -1381,7 +2067,16 @@ button:hover {
   }
 
   .tr-form-grid,
-  .tr-inline-grid {
+  .tr-inline-grid,
+  .tr-inline-grid-3,
+  .tr-layout-columns,
+  .tr-daily-sheet-columns {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media print {
+  .tr-daily-sheet-columns {
     grid-template-columns: 1fr;
   }
 }
@@ -1399,6 +2094,20 @@ button:hover {
     display: inline;
   }
 
+  /* Daily Sheet's "Print / Export" scope picker — see PrintExportButton in
+     app/daily-sheet/page.tsx, which sets this attribute on <body> right
+     before calling window.print() (and clears it again on "afterprint").
+     Meals-only / Housekeeping-only just hides the other section entirely;
+     "both" (or no attribute — a plain browser Ctrl+P) prints everything,
+     unchanged from before this existed. */
+  body[data-print-scope="meals"] .tr-housekeeping-section {
+    display: none !important;
+  }
+
+  body[data-print-scope="housekeeping"] .tr-meals-section {
+    display: none !important;
+  }
+
   html,
   body {
     background: none;
@@ -1412,4 +2121,41 @@ button:hover {
     border: none;
     box-shadow: none;
   }
+}
+
+/* -------------------------------------------------------------------------
+   Custom tooltip — replaces the browser's native black/white `title`
+   popover so hover text matches the rest of the site (same surface/border/
+   text tokens as a card) instead of looking like an OS-level element bolted
+   on top of it. Any element with a `data-tooltip="..."` attribute gets one
+   automatically — see TooltipHost.tsx (mounted once in app/layout.tsx),
+   which renders the actual bubble as a real `position: fixed` DOM node
+   rather than a CSS ::after. That's deliberate, not just a style choice: a
+   huge number of these live inside grid table cells (.tr-grid-cell), which
+   have their own `overflow: hidden` for ellipsis/clipping — a pseudo-
+   element tooltip anchored to one of those cells would itself get clipped
+   and never actually show. A fixed-position node anchored via JS-measured
+   coordinates isn't affected by any ancestor's overflow at all.
+
+   Positioned by TooltipHost to follow the CURSOR (just above/right of it),
+   not the trigger element's own center — no arrow/pointer graphic, since
+   there's no longer a single fixed spot on the trigger to point back at.
+   ------------------------------------------------------------------------- */
+.tr-tooltip-bubble {
+  position: fixed;
+  background: var(--tr-surface-strong);
+  color: var(--tr-text);
+  border: 1px solid var(--tr-border);
+  border-radius: 6px;
+  padding: 5px 9px;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.35;
+  white-space: pre-line;
+  max-width: 260px;
+  width: max-content;
+  text-align: left;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.14);
+  z-index: 200;
+  pointer-events: none;
 }

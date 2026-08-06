@@ -22,6 +22,12 @@ export async function GET(req: NextRequest) {
   // just being a label with no effect on placement.
   const nearBookingIdRaw = req.nextUrl.searchParams.get("nearBookingId");
   const nearBookingId = nearBookingIdRaw ? Number(nearBookingIdRaw) : null;
+  // "Shares bed with" — when set, the ONE bed already belonging to this
+  // specific declared partner is allowed to reappear as an option (see
+  // findAvailableBeds's onlyShareableWithBookingId) — every OTHER occupied
+  // bed in the building stays hidden regardless.
+  const shareBedWithBookingIdRaw = req.nextUrl.searchParams.get("shareBedWithBookingId");
+  const shareBedWithBookingId = shareBedWithBookingIdRaw ? Number(shareBedWithBookingIdRaw) : null;
   // "single" or "double" — see the Bed Type dropdown on the booking forms.
   // Omitted entirely = no type filter (used by callers that don't offer the
   // dropdown, e.g. the Shares Bed With partner-bed lookup).
@@ -46,7 +52,7 @@ export async function GET(req: NextRequest) {
   }
 
   const [available, activeJoins] = await Promise.all([
-    findAvailableBeds({ arrivalDate, departureDate, excludeBookingId, nearRoomId }),
+    findAvailableBeds({ arrivalDate, departureDate, excludeBookingId, nearRoomId, onlyShareableWithBookingId: shareBedWithBookingId }),
     db
       .select({ bed1Id: joinedBeds.bed1Id, bed2Id: joinedBeds.bed2Id, startDate: joinedBeds.startDate, endDate: joinedBeds.endDate, mode: joinedBeds.mode })
       .from(joinedBeds)
@@ -82,6 +88,7 @@ export async function GET(req: NextRequest) {
     id: bed.id,
     type: bed.type,
     room: { roomId: bed.roomId, roomName: bed.roomName, floorId: bed.floorId, floorName: bed.floorName },
+    sharesWith: bed.sharesWith,
   }));
 
   // Auto-Join Fallback: if "Double" was requested and nothing above

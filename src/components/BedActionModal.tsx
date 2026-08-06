@@ -20,6 +20,68 @@ interface RoomOption {
 }
 
 /**
+ * Floor, then room within it — like navigating into a folder — rather than
+ * one long flat "floor — room" list. A hostel with several floors/areas
+ * made the flat dropdown tall enough to blow past the top of the page; two
+ * short steps keeps every screen to a handful of rows.
+ */
+function RoomPicker({ rooms, value, onChange }: { rooms: RoomOption[]; value: number | null; onChange: (roomId: number) => void }) {
+  const [floorName, setFloorName] = useState<string | null>(null);
+
+  const floors = [...new Set(rooms.map((r) => r.floorName))];
+  const selected = rooms.find((r) => r.id === value) ?? null;
+
+  if (selected && floorName == null) {
+    return (
+      <div className="tr-room-picker-selected">
+        <span>{selected.floorName} — {selected.name}</span>
+        <button type="button" onClick={() => setFloorName(selected.floorName)}>Change</button>
+      </div>
+    );
+  }
+
+  if (floorName == null) {
+    return (
+      <ul className="tr-room-picker-list">
+        {floors.map((name) => (
+          <li key={name}>
+            <button type="button" onClick={() => setFloorName(name)}>
+              {name}
+              <span aria-hidden="true">›</span>
+            </button>
+          </li>
+        ))}
+      </ul>
+    );
+  }
+
+  const roomsOnFloor = rooms.filter((r) => r.floorName === floorName);
+  return (
+    <div>
+      <button type="button" className="tr-room-picker-back" onClick={() => setFloorName(null)}>
+        ‹ {floorName}
+      </button>
+      <ul className="tr-room-picker-list">
+        {roomsOnFloor.map((r) => (
+          <li key={r.id}>
+            <button
+              type="button"
+              className={r.id === value ? "tr-room-picker-active" : undefined}
+              onClick={() => {
+                onChange(r.id);
+                setFloorName(null);
+              }}
+            >
+              {r.name}
+            </button>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+/**
  * Move Bed / Send to Dorm Storage, from the grid's bed-label context menu.
  * Both just place the bed in a room from an effective date — see POST
  * /api/bed-locations — "storage" mode only skips the room picker because
@@ -38,14 +100,14 @@ export default function BedActionModal({
   onSubmit: (bedId: number, roomId: number, startDate: ISODate, previousRoomId: number) => Promise<void> | void;
 }) {
   const [rooms, setRooms] = useState<RoomOption[]>([]);
-  const [roomId, setRoomId] = useState("");
+  const [roomId, setRoomId] = useState<number | null>(null);
   const [startDate, setStartDate] = useState<ISODate>("");
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     if (!state) return;
     setStartDate(state.defaultDate);
-    setRoomId("");
+    setRoomId(null);
     setSaving(false);
     if (state.mode !== "move") return;
 
@@ -57,7 +119,9 @@ export default function BedActionModal({
         const floorNameById = new Map(floorRows.map((f) => [f.id, f.name]));
         setRooms(
           roomRows
-            .filter((r) => !r.excludeFromCapacity)
+            // A bed is already in its own current room — offering that as a
+            // "move" destination isn't a real action.
+            .filter((r) => !r.excludeFromCapacity && r.id !== state.previousRoomId)
             .map((r) => ({ id: r.id, name: r.name, floorName: floorNameById.get(r.floorId) ?? "" }))
             .sort((a, b) => a.floorName.localeCompare(b.floorName) || a.name.localeCompare(b.name, undefined, { numeric: true }))
         );
@@ -67,12 +131,12 @@ export default function BedActionModal({
 
   if (!state) return null;
 
-  const targetRoomId = state.mode === "storage" ? dormStorageRoomId : Number(roomId);
-  const canSubmit = Number.isInteger(targetRoomId) && targetRoomId > 0 && !!startDate;
+  const targetRoomId = state.mode === "storage" ? dormStorageRoomId : roomId;
+  const canSubmit = targetRoomId != null && targetRoomId > 0 && !!startDate;
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!canSubmit || !state) return;
+    if (!canSubmit || !state || targetRoomId == null) return;
     setSaving(true);
     await onSubmit(state.bedId, targetRoomId, startDate, state.previousRoomId);
   }
@@ -90,15 +154,10 @@ export default function BedActionModal({
         </h2>
 
         {state.mode === "move" && (
-          <label style={{ display: "block", marginBottom: 10 }}>
+          <div style={{ marginBottom: 10 }}>
             <div className="tr-muted" style={{ fontSize: 12, marginBottom: 4 }}>Room</div>
-            <select value={roomId} onChange={(e) => setRoomId(e.target.value)} required autoFocus style={{ width: "100%" }}>
-              <option value="" disabled>Select a room…</option>
-              {rooms.map((r) => (
-                <option key={r.id} value={r.id}>{r.floorName} — {r.name}</option>
-              ))}
-            </select>
-          </label>
+            <RoomPicker key={state.bedId} rooms={rooms} value={roomId} onChange={setRoomId} />
+          </div>
         )}
 
         <label style={{ display: "block", marginBottom: 16 }}>
@@ -109,7 +168,7 @@ export default function BedActionModal({
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
           <button type="button" onClick={onClose} disabled={saving}>Cancel</button>
           <button type="submit" className="primary" disabled={saving || !canSubmit}>
-            {saving ? "Saving…" : state.mode === "storage" ? "Send to Storage" : "Move Bed"}
+            {saving ? "Saving…" : state.mode === "storage" ? "Send to storage" : "Move bed"}
           </button>
         </div>
       </form>

@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
-import { joinedBeds } from "@/db/schema";
+import { bookings, joinedBeds } from "@/db/schema";
 import { requireEditor } from "@/lib/auth";
-import { and, eq, gt, isNull, or } from "drizzle-orm";
+import { logChange } from "@/lib/change-log";
+import { and, eq, gt, inArray, isNull, or } from "drizzle-orm";
 
 export const dynamic = "force-dynamic";
 
@@ -45,6 +46,27 @@ export async function POST(req: NextRequest) {
   if (!active) {
     return NextResponse.json({ error: "No active join covers that date" }, { status: 404 });
   }
+
+  // Splitting is the reverse of joining — un-pushing two mattresses apart —
+  // so it's just as much a physical bed-type change as joining is (see
+  // POST /api/joined-beds' own guard). Someone still booked into either
+  // bed PAST the split point is relying on the merged configuration
+  // staying merged for the rest of their stay; a booking that's already
+  // over by atDate (departing on or before it) isn't affected either way.
+  const [blocker] = await db
+    .select({ guestName: bookings.guestName, arrivalDate: bookings.arrivalDate, departureDate: bookings.departureDate })
+    .from(bookings)
+    .where(and(inArray(bookings.bedId, [bed1Id, bed2Id]), gt(bookings.departureDate, atDate)));
+  if (blocker) {
+    return NextResponse.json(
+      {
+        error: `${blocker.guestName} is booked in one of these beds through ${blocker.departureDate} — split or move that booking first, then split these beds.`,
+      },
+      { status: 400 }
+    );
+  }
+
+  await logChange({ category: "grid", action: "Split beds", summary: `Split a ${active.mode === "solo" ? "Solo Double" : "Couple Double"} back into 2 Singles, from ${atDate}` });
 
   if (active.startDate === atDate) {
     // Splitting on the exact day it started leaves nothing behind — delete

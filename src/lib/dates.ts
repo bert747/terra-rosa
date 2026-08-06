@@ -50,6 +50,15 @@ export function isIsoDate(value: string): boolean {
   return /^\d{4}-\d{2}-\d{2}$/.test(value);
 }
 
+/** Monday of the week `date` falls in — the kitchen's prep table is always Monday-start, whatever day is picked below it. */
+export function mondayOf(isoDate: string): string {
+  const d = new Date(`${isoDate}T00:00:00Z`);
+  const day = d.getUTCDay(); // 0 = Sunday .. 6 = Saturday
+  const diff = day === 0 ? -6 : 1 - day;
+  d.setUTCDate(d.getUTCDate() + diff);
+  return d.toISOString().slice(0, 10);
+}
+
 export function nightsBetween(startIso: string, endIso: string | null): number {
   if (!endIso || !isIsoDate(startIso) || !isIsoDate(endIso)) return 0;
   const start = new Date(`${startIso}T00:00:00Z`).getTime();
