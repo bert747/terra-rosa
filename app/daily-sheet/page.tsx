@@ -178,6 +178,14 @@ function PrintExportButton() {
     function reset() {
       delete document.body.dataset.printScope;
       window.removeEventListener("afterprint", reset);
+      // Chromium quirk: printing a table with table-layout:auto (see
+      // .tr-table) recomputes its column widths for the print pass, and
+      // doesn't always reflow them back down on return to screen — leaving
+      // a stray horizontal scrollbar under the meal table. A synchronous
+      // reflow of the whole page clears the stale layout.
+      document.body.style.display = "none";
+      void document.body.offsetHeight;
+      document.body.style.display = "";
     }
     window.addEventListener("afterprint", reset);
     window.print();
@@ -287,7 +295,6 @@ export default function DailySheetPage() {
           </span>
         </h2>
         <span style={{ flex: 1 }} />
-        <PrintExportButton />
         <DateNavRow
           date={date}
           onPick={setDate}
@@ -296,6 +303,7 @@ export default function DailySheetPage() {
           prevLabel="← Prev week"
           nextLabel="Next week →"
         />
+        <PrintExportButton />
       </div>
 
       <div className="tr-card" style={{ marginBottom: 24, overflowX: "auto" }}>
@@ -376,7 +384,6 @@ export default function DailySheetPage() {
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
         <h2 className="tr-section-title" style={{ margin: 0 }}>Housekeeping</h2>
         <span style={{ flex: 1 }} />
-        <PrintExportButton />
         <DateNavRow
           date={date}
           onPick={setDate}
@@ -385,6 +392,7 @@ export default function DailySheetPage() {
           prevLabel="← Prev day"
           nextLabel="Next day →"
         />
+        <PrintExportButton />
       </div>
 
       {loadingSheet && <p className="tr-muted" style={{ fontSize: 12, marginTop: 0, marginBottom: 16 }}>Loading…</p>}
@@ -398,7 +406,7 @@ export default function DailySheetPage() {
       <div className="tr-daily-sheet-columns" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
         <div className="tr-card">
           <Section first>
-            <h3 className="tr-section-title" style={{ marginBottom: 8 }}>Beds to Move</h3>
+            <h3 className="tr-section-title" style={{ marginBottom: 8 }}>Beds to move</h3>
             {sheet.moverTasks.length === 0 ? (
               <p className="tr-muted">No bed moves needed today.</p>
             ) : (
@@ -411,7 +419,12 @@ export default function DailySheetPage() {
           </Section>
 
           <Section>
-            <h3 className="tr-section-title" style={{ marginBottom: 8 }}>Beds to Make</h3>
+            <h3 className="tr-section-title" style={{ marginBottom: 8 }}>
+              Beds to make
+              <span className="tr-muted" style={{ fontWeight: 400, fontSize: 11, marginLeft: 8 }}>
+                ● needs making · ○ nothing to do
+              </span>
+            </h3>
             {sheet.roomsToMake.length === 0 ? (
               <p className="tr-muted">No beds to make today.</p>
             ) : (
@@ -419,7 +432,11 @@ export default function DailySheetPage() {
                 {sheet.roomsToMake.map((r, i) => (
                   <div
                     key={r.roomName}
-                    style={i > 0 ? { marginTop: 8, paddingTop: 8, borderTop: "1px solid var(--tr-border)" } : undefined}
+                    // Dashed, not solid — a lighter touch than the section
+                    // divider above (see Section's own borderTop), so items
+                    // WITHIN "Beds to Make" don't read at the same visual
+                    // weight as the line separating it from "Beds to Move".
+                    style={i > 0 ? { marginTop: 8, paddingTop: 8, borderTop: "1px dashed var(--tr-border)" } : undefined}
                   >
                     <strong>{r.roomName}</strong>
                     <div style={{ display: "flex", flexDirection: "column", gap: 2, marginTop: 2 }}>

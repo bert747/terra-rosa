@@ -102,6 +102,79 @@ textarea {
   outline: none;
 }
 
+/* Every checkbox site-wide, not just the ones that happen to carry
+   .tr-settings-checkbox (which additionally fixes the min-height/focus-ring
+   sizing quirk that class was originally built for — see its own comment).
+   Plain, unstyled checkboxes (e.g. History's category filter) would
+   otherwise render in the browser's default blue, which reads as a
+   different, unthemed control next to everything else on the page. */
+input[type="checkbox"] {
+  accent-color: var(--tr-accent);
+}
+
+/* GuestTypeSelect's own trigger button — a <button>, not one of the tags
+   above, so it needs its own copy of the same box styling to look like the
+   plain <select>s around it. See that component's own comment for why it
+   isn't a real <select>. */
+.tr-guest-type-trigger {
+  box-sizing: border-box;
+  margin: 0;
+  border: 1px solid var(--tr-border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  min-height: 40px;
+  font-size: 14px;
+  background: var(--tr-surface-strong);
+  color: var(--tr-text);
+  cursor: pointer;
+}
+
+.tr-guest-type-swatch {
+  width: 14px;
+  height: 14px;
+  border-radius: 4px;
+  flex-shrink: 0;
+  border: 1px solid rgba(0, 0, 0, 0.15);
+}
+
+.tr-guest-type-menu {
+  background: var(--tr-surface-strong);
+  border: 1px solid var(--tr-border-strong);
+  border-radius: 8px;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.16);
+  padding: 4px;
+  margin: 0;
+  list-style: none;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.tr-guest-type-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  /* Lightly tinted at rest — the saturated version is reserved for hover
+     (see below) so the closed-list scan isn't as loud as the live pill
+     colours on the grid. */
+  background: color-mix(in srgb, var(--option-colour) 18%, white);
+}
+
+.tr-guest-type-option:hover {
+  background: color-mix(in srgb, var(--option-colour) 55%, white);
+}
+
+.tr-guest-type-option-none {
+  background: none;
+}
+
+.tr-guest-type-option-none:hover {
+  background: var(--tr-accent-soft);
+}
+
 input:focus,
 select:focus,
 textarea:focus {
@@ -331,6 +404,11 @@ button:hover {
 .tr-section-title {
   margin: 0 0 12px;
   font-size: 16px;
+  /* Explicit rather than relying on <h2>/<h3>'s own default boldness — a
+     group title (e.g. "Beds to Move" vs "Beds to Make") needs to clearly
+     outrank the dividers between the individual items inside it, not just
+     read as "slightly heavier text." */
+  font-weight: 700;
 }
 
 .tr-table-wrap {
@@ -342,6 +420,17 @@ button:hover {
 .tr-table {
   width: 100%;
   table-layout: auto;
+}
+
+/* Overrides the base th/td { vertical-align: top; } rule (see near the top
+   of this file) for plain single-line-per-cell tables (Events, Users) —
+   top-alignment reads as "not centred in the row" once any cell (e.g. the
+   actions column) is taller than a line of text. Scoped to .tr-table rather
+   than changed globally so multi-line content elsewhere (e.g. the Daily
+   Sheet meal table, which sets its own vertical-align: top inline per cell)
+   is unaffected. */
+.tr-table td {
+  vertical-align: middle;
 }
 
 .tr-col-actions {
@@ -550,16 +639,59 @@ button:hover {
   text-decoration: none;
 }
 
-.tr-row-link:hover {
-  background: #f5ecde;
-}
-
 .tr-row-link:hover .tr-cell-link {
   color: inherit;
 }
 
+/* The guest-category stripe (BookingsTable's own left-edge accent) is set
+   via this custom property, inline, rather than a raw inline box-shadow —
+   an inline box-shadow would beat :hover below outright regardless of
+   specificity (inline style always wins over any non-!important stylesheet
+   rule, hover or not), which is exactly why the plain background hover
+   above never showed on a coloured row: the inline shadow painted over it
+   completely. Routing the colour through a variable lets :hover's own
+   rule combine both layers in one place instead. Falls back to transparent
+   (invisible) for a row with no category coloured at all. */
 .tr-row-link {
   cursor: pointer;
+  box-shadow: inset 4px 0 0 var(--tr-row-stripe, transparent);
+}
+
+/* A visible border around the WHOLE row on hover, not just a background
+   tint — the background alone is invisible on a row already tinted pale by
+   its own guest category (see BookingsTable's row backgroundColor), same
+   root cause as the stripe above. Matches the grid pill's own hover
+   language (a border-colour change, not a coloured wash) rather than
+   introducing a third, different "this is hovered" convention. One pixel
+   thicker than a plain 1px border so it reads as a deliberate change, not
+   just a colour swap — same reasoning as .tr-grid-pill-native-hover's own
+   border-width bump. Combined with the stripe (not replacing it) via a
+   second comma-separated box-shadow layer, since box-shadow only takes its
+   later rule's value wholesale otherwise. */
+.tr-row-link:hover {
+  box-shadow: inset 4px 0 0 var(--tr-row-stripe, transparent), inset 0 0 0 2px var(--tr-text);
+}
+
+/* A plain clickable row where cells are NOT wrapped in .tr-cell-link
+   anchors (see .tr-row-link above, which zeroes cell padding assuming that
+   wrapper supplies its own) — used where clicking a row should trigger an
+   action (e.g. Events, in "Edit" mode) but a full anchor-per-cell wrapper
+   would be overkill. Same stripe-variable + hover-ring pattern as
+   .tr-row-link above (see its own comment) — a plain background swap would
+   be equally invisible on a coloured Events row. */
+.tr-row-clickable {
+  box-shadow: inset 4px 0 0 var(--tr-row-stripe, transparent);
+}
+
+.tr-row-clickable:hover {
+  box-shadow: inset 4px 0 0 var(--tr-row-stripe, transparent), inset 0 0 0 2px var(--tr-text);
+}
+
+/* Same stripe, no click/hover behaviour — for a row that's just showing its
+   own colour (e.g. Events outside "Edit" mode) rather than acting as a
+   button. */
+.tr-row-tinted {
+  box-shadow: inset 4px 0 0 var(--tr-row-stripe, transparent);
 }
 
 .tr-sticky-actions {
@@ -1085,11 +1217,33 @@ button:hover {
   white-space: nowrap;
 }
 
-.tr-grid-booking-pill:hover {
+.tr-grid-booking-pill:hover,
+/* JS-driven twin of the rule above — see setOwnHoverHighlight in
+   GridCanvas.tsx. A booking's main pill and its own "checks out today"
+   departing tail are two separate elements in two different <td>s (see the
+   long comment on applyPillHighlightClasses), so real CSS :hover on the
+   pill alone can never reach the tail — without this, hovering the pill
+   showed the highlight stopping dead at the checkout-date seam instead of
+   continuing to the tail's own rounded end, which read as the tail
+   belonging to a different, unrelated booking. Applied to BOTH elements
+   together on hover of either, matching this same border-color/box-shadow
+   exactly (not the louder accent ring .tr-grid-pill-hover-preview uses for
+   split-sibling preview — that's a different, deliberately more attention-
+   grabbing signal) — since it's a plain colour/shadow match rather than a
+   ring, the existing -3px bleed overlap already fuses the two elements
+   seamlessly with no seam-omission math needed the way the accent ring
+   requires. */
+.tr-grid-pill-native-hover {
   /* brightness(0.97) alone was barely perceptible — a real border colour
      shift plus a soft lift reads as "this is now the hovered thing"
-     immediately, rather than requiring a careful side-by-side look. */
+     immediately, rather than requiring a careful side-by-side look. One
+     pixel thicker than the pill's own resting 1px border (not just a
+     colour swap) so the hover state reads as a real change even at a
+     glance — safe to bump without shifting layout since box-sizing:
+     border-box (see the universal `*` reset) keeps the box's outer
+     dimensions fixed regardless of border-width. */
   filter: brightness(0.97);
+  border-width: 2px;
   border-color: var(--tr-text);
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.18);
 }
@@ -1113,22 +1267,15 @@ button:hover {
   opacity: 0.6;
 }
 
-/* Folded-corner "this booking has a note" marker — an Excel cell-comment
-   idiom (a small triangle in the corner) rather than showing the note text
-   itself, which would compete with the guest name for the pill's often-tiny
-   width. The pill (.tr-grid-booking-pill) is already `position: absolute`,
-   which makes it a containing block for this child too — top:0/right:0
-   here lands exactly on the pill's own corner, no extra offset needed. */
-.tr-grid-pill-note-corner {
-  position: absolute;
-  top: 0;
-  right: 0;
-  width: 0;
-  height: 0;
-  border-style: solid;
-  border-width: 0 9px 9px 0;
-  border-color: transparent var(--tr-accent) transparent transparent;
-  z-index: 1;
+/* "This booking has a note" marker — a small icon placed before the guest
+   name (like .tr-grid-pill-alert/.tr-grid-pill-satisfied above) rather than
+   showing the note text itself, which would compete with the guest name for
+   the pill's often-tiny width. Hover/tap for the full text via the shared
+   tooltip system. */
+.tr-grid-pill-note-icon {
+  flex: none;
+  font-size: 11px;
+  opacity: 0.75;
 }
 
 /* Flat, border-less edge that bleeds -3px into the NEXT/PREVIOUS cell's own
@@ -1346,6 +1493,64 @@ button:hover {
    keyed off the same weekend check is simplest. */
 .tr-grid th.tr-grid-weekend {
   background-color: #efece7;
+}
+
+/* A day before today — no longer bookable, so its header should read as
+   "closed off" rather than looking like any other selectable day. Same
+   flat-colour approach as .tr-grid-weekend above (and for the same reason:
+   one date per <th>, no colSpan). Listed after .tr-grid-weekend so a day
+   that's both past AND a weekend gets this (stronger) treatment. */
+.tr-grid th.tr-grid-past {
+  background-color: #e2e2e2;
+  color: var(--tr-text-muted);
+}
+
+/* Today's own header — a distinct pink (not just "not grey"), so the one
+   column everything else is measured against is unmistakable at a glance.
+   Listed after .tr-grid-past/-weekend so today always wins over either
+   (a day is never both past AND today, but IS always potentially both a
+   weekend AND today — this must read as "today" first). */
+.tr-grid th.tr-grid-today {
+  background-color: var(--tr-accent);
+  color: white;
+}
+
+/* Every date column before today, all the way down each bed row — not just
+   the header (see .tr-grid th.tr-grid-past above). A free/inactive cell is
+   NEVER colSpan'd across multiple dates (renderRowCells only merges
+   consecutive BOOKED cells into one wide <td> — see renderSingleCell's own
+   comment), so unlike the weekend wallpaper below this needs no tiled-
+   gradient trick: one flat override per cell is enough, and !important
+   deliberately wins over .tr-grid-cell's room tint, the weekend wallpaper,
+   AND .tr-grid-inactive's hatch pattern all at once, rather than needing a
+   fourth background-image layer threaded through every rule that currently
+   composites those three. Uses the SAME diagonal-hatch pattern as
+   .tr-grid-inactive (a bed not currently placed here) rather than a flat
+   grey — "not bookable" should read with the one visual language the grid
+   already uses for that meaning, not a second, different-looking one.
+   Booking pills are NOT touched by this (see .tr-grid-booking-pill's own
+   "deliberately flat, no weekend gradient" note) — a past booking still
+   needs to read as a normal, legible pill; only the free space around it
+   closes off. */
+.tr-grid-cell-past {
+  background-color: #f0f0ec !important;
+  background-image: repeating-linear-gradient(
+    45deg,
+    #f0f0ec,
+    #f0f0ec 4px,
+    #e6e6e0 4px,
+    #e6e6e0 8px
+  ) !important;
+}
+
+/* Today's column, body cells — a paler version of the header's own pink
+   (--tr-accent-soft, already used elsewhere in the app for a light pink
+   wash) rather than the full-strength header colour, which would be too
+   loud repeated down every row. Same !important reasoning as
+   .tr-grid-cell-past above. */
+.tr-grid-cell-today {
+  background-color: var(--tr-accent-soft) !important;
+  background-image: none !important;
 }
 
 /* A bed not placed in this room on this date — sprouted in later or already

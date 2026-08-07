@@ -110,9 +110,10 @@ export async function POST(req: NextRequest) {
     // solo, unshared bed only, never a multi-capacity/occupied one (that's
     // reserved for an explicit "shares bed with" pairing, handled above).
     let nearRoomId: number | null = null;
+    let linkedBooking: typeof bookings.$inferSelect | undefined;
     if (booking.linkedBookingId != null) {
-      const [linked] = await db.select({ bedId: bookings.bedId }).from(bookings).where(eq(bookings.id, booking.linkedBookingId));
-      if (linked?.bedId != null) nearRoomId = await roomIdForBed(linked.bedId, booking.arrivalDate);
+      [linkedBooking] = await db.select().from(bookings).where(eq(bookings.id, booking.linkedBookingId));
+      if (linkedBooking?.bedId != null) nearRoomId = await roomIdForBed(linkedBooking.bedId, booking.arrivalDate);
     }
 
     const candidateBeds = await findAvailableBeds({
@@ -132,7 +133,7 @@ export async function POST(req: NextRequest) {
       // whole group and surface it as a proposal for staff to
       // confirm/decline instead of applying it automatically.
       if (nearRoomId != null) {
-        const group = await resolveExistingGroup(booking.linkedBookingId!);
+        const group = await resolveExistingGroup(booking.linkedBookingId!, linkedBooking);
         if (group.length > 0) {
           const proposal = await findGroupMoveProposal(booking, group, nearRoomId);
           if (proposal) {
@@ -156,7 +157,7 @@ export async function POST(req: NextRequest) {
       continue;
     }
 
-    const chosen = [...candidateBeds].sort((a, b) => a.id - b.id)[0];
+    const chosen = candidateBeds.reduce((lowest, b) => (b.id < lowest.id ? b : lowest));
     const check = await checkBedCapacity(chosen.id, booking.arrivalDate, booking.departureDate, [booking.id]);
     if (!check.ok) {
       skipped.push({ id: booking.id, guestName: booking.guestName, reason: check.error ?? "Bed no longer available." });

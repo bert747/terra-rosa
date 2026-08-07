@@ -78,8 +78,10 @@ export async function POST(req: NextRequest) {
     .values({ bedId, roomId, startDate, endDate })
     .returning();
 
-  const [bed] = await db.select({ type: beds.type }).from(beds).where(eq(beds.id, bedId));
-  const [room] = await db.select({ name: rooms.name }).from(rooms).where(eq(rooms.id, roomId));
+  const [[bed], [room]] = await Promise.all([
+    db.select({ type: beds.type }).from(beds).where(eq(beds.id, bedId)),
+    db.select({ name: rooms.name }).from(rooms).where(eq(rooms.id, roomId)),
+  ]);
   await logChange({
     category: "grid",
     action: "Moved bed",

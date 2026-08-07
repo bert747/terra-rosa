@@ -4,17 +4,9 @@ import { db } from "@/db";
 import { events } from "@/db/schema";
 import { requireEditor } from "@/lib/auth";
 import { logChange } from "@/lib/change-log";
+import { parseEventBody } from "@/lib/events";
 
 export const dynamic = "force-dynamic";
-
-function parseEventBody(body: unknown) {
-  const payload = (body ?? {}) as Record<string, unknown>;
-  const name = String(payload.name ?? "").trim();
-  const startDate = String(payload.startDate ?? "");
-  const endDate = String(payload.endDate ?? "");
-  const notes = String(payload.notes ?? "").trim() || null;
-  return { name, startDate, endDate, notes };
-}
 
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
@@ -29,7 +21,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     return NextResponse.json({ error: "Invalid event id" }, { status: 400 });
   }
 
-  const { name, startDate, endDate, notes } = parseEventBody(await req.json());
+  const { name, startDate, endDate, notes, colour } = parseEventBody(await req.json());
   if (!name || !startDate || !endDate) {
     return NextResponse.json({ error: "name, startDate and endDate are required" }, { status: 400 });
   }
@@ -37,9 +29,12 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     return NextResponse.json({ error: "End date cannot be before the start date" }, { status: 400 });
   }
 
+  const updates: Partial<typeof events.$inferInsert> = { name, startDate, endDate, notes };
+  if (colour !== undefined) updates.colour = colour;
+
   const [row] = await db
     .update(events)
-    .set({ name, startDate, endDate, notes })
+    .set(updates)
     .where(eq(events.id, eventId))
     .returning();
 

@@ -67,6 +67,8 @@ export interface GridBooking {
    * fires when it's NOT met). Powers the pill's "(same bed as X)" label.
    */
   relationship?: { kind: "room" | "bed"; otherGuestName: string };
+  /** This booking's guest category's colour (hex), or null if uncategorised or that category was deleted with no colour to fall back on. Drives the pill's background/border — see guestCategories in schema.ts. */
+  guestCategoryColour?: string | null;
 }
 
 export interface GridBedInfo {

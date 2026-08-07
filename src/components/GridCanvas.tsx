@@ -18,6 +18,7 @@ import SplitMergeConflictModal, { type SplitMergeConflictModalState } from "@/co
 import PlannedChangeConflictModal, { type PlannedChangeConflictModalState } from "@/components/PlannedChangeConflictModal";
 import ConfirmModal, { type ConfirmModalState } from "@/components/ConfirmModal";
 import { CalendarIcon, CalendarPopover } from "@/components/DateField";
+import { useGuestCategories } from "@/lib/use-guest-categories";
 import HelpButton from "@/components/HelpButton";
 import type { GroupMoveProposal } from "@/lib/group-move";
 import type { RoomFixOption } from "@/lib/allocation-fixes";
@@ -68,6 +69,29 @@ function weekday(date: ISODate): string {
 function isWeekend(date: ISODate): boolean {
   const day = dayOfWeek(date);
   return day === 0 || day === 6;
+}
+
+function isPastDay(date: ISODate, today: ISODate): boolean {
+  return date < today;
+}
+
+/**
+ * Inline style overriding a booking pill's colour to its guest category's
+ * own colour. Sets BOTH --tr-booking-color and --tr-booking-fill rather
+ * than just the former — --tr-booking-fill is declared once, in globals.css,
+ * as `color-mix(in srgb, var(--tr-booking-color) 24%, white)`; browsers
+ * resolve that nested var() against whatever --tr-booking-color was AT THE
+ * POINT --tr-booking-fill's OWN inherited value was last computed, not
+ * against a closer override on the same element — so overriding only the
+ * color left the fill silently stuck on the default. Computing the mix here
+ * in JS and setting both custom properties directly sidesteps that.
+ */
+function bookingColourVars(colour: string | null | undefined): React.CSSProperties {
+  if (!colour) return {};
+  return {
+    ["--tr-booking-color" as string]: colour,
+    ["--tr-booking-fill" as string]: `color-mix(in srgb, ${colour} 24%, white)`,
+  } as React.CSSProperties;
 }
 
 /**
@@ -309,6 +333,169 @@ function singleUnitPartnerOptions(room: RoomGridRow, excludeBedId: number, dataI
     });
 }
 
+/**
+ * The grid's "Display settings" gear button + dropdown. Split out of
+ * GridCanvas itself so its own hover/open state doesn't live on that
+ * component — GridCanvas renders every room row without memoization (only
+ * columns are virtualized), so any state change there reconciles the whole
+ * grid. This menu's own local state (open/closed, which row is hovered for
+ * its live preview, the measured preview-name width) previously lived on
+ * GridCanvas and made the preview feel slow to open/hover on any property
+ * with a lot of rows, even though the preview itself is two static mock
+ * pills — nothing about it actually needs the real grid data.
+ */
+function GridSettingsMenu({
+  showSharesWithText,
+  onShowSharesWithTextChange,
+  showHoverDetails,
+  onShowHoverDetailsChange,
+}: {
+  showSharesWithText: boolean;
+  onShowSharesWithTextChange: (value: boolean) => void;
+  showHoverDetails: boolean;
+  onShowHoverDetailsChange: (value: boolean) => void;
+}) {
+  const [settingsMenuOpen, setSettingsMenuOpen] = useState(false);
+  // Measured so the "booking details when hovering" preview's mock tooltip
+  // can start a few px past the actual rendered end of the preview name —
+  // a hardcoded percentage would drift out of sync the moment the name
+  // (or the font) changed.
+  const [previewNameWidth, setPreviewNameWidth] = useState(0);
+  // Which Display settings row (if either) the pointer is currently over —
+  // while hovering, that row's own preview shows what you'd GET by
+  // clicking (the opposite of the current setting), not the current
+  // setting itself. That's the whole point of hovering it: an instant
+  // "here's what turning this on/off looks like" even when nothing in the
+  // grid right now happens to demonstrate it (e.g. no booking currently in
+  // view has a Sleeps-near/Shares-bed pairing to look at).
+  const [hoveredPreviewToggle, setHoveredPreviewToggle] = useState<"sharesWith" | "hoverDetails" | null>(null);
+
+  return (
+    <div style={{ position: "relative" }}>
+      <button
+        type="button"
+        aria-label="Grid display settings"
+        data-tooltip="Grid display settings"
+        onClick={() => setSettingsMenuOpen((v) => !v)}
+        // height matches every other toolbar button's own real rendered
+        // height (40px, from the default button padding — see
+        // globals.css) rather than shrinking to the icon's own smaller
+        // natural size; padding trimmed down from the default 14px
+        // sides (sized for text) since a single icon doesn't need that
+        // much horizontal breathing room — it was rendering noticeably
+        // WIDER than tall, an odd shape next to square-ish icon
+        // buttons elsewhere.
+        style={{ height: 40, padding: "0 11px", display: "inline-flex", alignItems: "center" }}
+      >
+        <GearIcon size={18} />
+      </button>
+      {settingsMenuOpen && (
+        <>
+          <div style={{ position: "fixed", inset: 0, zIndex: 39 }} onClick={() => setSettingsMenuOpen(false)} />
+          <div className="tr-actions-menu tr-settings-menu" style={{ position: "absolute", top: "calc(100% + 6px)", left: 0, zIndex: 40 }}>
+            <div className="tr-actions-menu-title">Display settings</div>
+            <label
+              className="tr-settings-toggle-row"
+              onMouseEnter={() => setHoveredPreviewToggle("sharesWith")}
+              onMouseLeave={() => setHoveredPreviewToggle((v) => (v === "sharesWith" ? null : v))}
+            >
+              <input
+                type="checkbox"
+                checked={showSharesWithText}
+                onChange={(e) => onShowSharesWithTextChange(e.target.checked)}
+                className="tr-settings-checkbox"
+              />
+              <span className="tr-settings-toggle-label">
+                <div style={{ fontWeight: 600 }}>&quot;Shares with&quot; info in grid</div>
+                <div className="tr-muted" style={{ fontSize: 11, marginTop: 2 }}>
+                  Spells out &quot;(same bed as X)&quot; or &quot;(same room as X)&quot; on every pill with a Sleeps-near/Shares-bed pairing. Turn off to keep just the small icon.
+                </div>
+              </span>
+              {/* Live preview, not a static screenshot — always matches what the toggle actually does, in both themes.
+                  "Luca" and "Rob" — sample names for this preview only, not real guest names anywhere else in
+                  the app. minWidth is sized for the LONGER (toggle-on) state specifically so the pill doesn't
+                  visibly resize when the "(same bed as X)" text appears/disappears — it should always look this
+                  wide. While the row is hovered, this shows what CLICKING would produce (the opposite of the
+                  current setting), not the current setting itself — an instant preview of the effect even when
+                  nothing in the real grid right now happens to demonstrate it. */}
+              <div className="tr-settings-preview">
+                <span className="tr-grid-booking-pill" style={{ position: "static", minWidth: 220 }}>
+                  <span className="tr-grid-pill-satisfied" aria-hidden="true">👥</span>
+                  <span className="tr-grid-pill-name">Luca</span>
+                  {(hoveredPreviewToggle === "sharesWith" ? !showSharesWithText : showSharesWithText) && (
+                    <span className="tr-grid-pill-relation">
+                      (same bed as <strong>Rob</strong>)
+                    </span>
+                  )}
+                </span>
+              </div>
+            </label>
+            <label
+              className="tr-settings-toggle-row"
+              onMouseEnter={() => setHoveredPreviewToggle("hoverDetails")}
+              onMouseLeave={() => setHoveredPreviewToggle((v) => (v === "hoverDetails" ? null : v))}
+            >
+              <input
+                type="checkbox"
+                checked={showHoverDetails}
+                onChange={(e) => onShowHoverDetailsChange(e.target.checked)}
+                className="tr-settings-checkbox"
+              />
+              <span className="tr-settings-toggle-label">
+                <div style={{ fontWeight: 600 }}>Booking details when hovering</div>
+                <div className="tr-muted" style={{ fontSize: 11, marginTop: 2 }}>
+                  Shows the stay dates in a tooltip near the cursor when you hover a pill. The name&apos;s already on the pill, so it isn&apos;t repeated. Alerts keep their own hover text either way.
+                </div>
+              </span>
+              {/* Same live-preview idea as the row above, but for the
+                  tooltip itself — reuses the real tooltip bubble class
+                  (see TooltipHost.tsx / globals.css) as a static mock.
+                  Deliberately a plain pill with no shares-with icon/text
+                  of its own — this toggle applies to every pill, shared
+                  or not, so the preview shouldn't imply it's specific to
+                  that case. Positioned a few px past the name's own
+                  measured width, vertically centered on the pill —
+                  roughly where a real cursor sits once you've actually
+                  read the name before pausing to hover. Shows the
+                  click-would-produce state while the row itself is
+                  hovered, same as the row above. */}
+              <div className="tr-settings-preview">
+                <span className="tr-grid-booking-pill" style={{ position: "relative", minWidth: 170 }}>
+                  <span
+                    className="tr-grid-pill-name"
+                    ref={(el) => {
+                      if (!el) return;
+                      const pillEl = el.closest<HTMLElement>(".tr-grid-booking-pill");
+                      if (!pillEl) return;
+                      setPreviewNameWidth(el.getBoundingClientRect().right - pillEl.getBoundingClientRect().left);
+                    }}
+                  >
+                    Luca
+                  </span>
+                  {(hoveredPreviewToggle === "hoverDetails" ? !showHoverDetails : showHoverDetails) && (
+                    <div
+                      className="tr-tooltip-bubble"
+                      style={{
+                        position: "absolute",
+                        top: "50%",
+                        left: previewNameWidth + 8,
+                        transform: "translateY(-100%)",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      06/08/2026 to 10/08/2026
+                    </div>
+                  )}
+                </span>
+              </div>
+            </label>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 export default function GridCanvas({ initialData, today }: { initialData: GridData; today: ISODate }) {
   const router = useRouter();
   const epochStart = useMemo(() => addDays(today, -365 * YEARS_BACK), [today]);
@@ -322,6 +509,10 @@ export default function GridCanvas({ initialData, today }: { initialData: GridDa
   const fetchTokenRef = useRef(0);
 
   const viewportRef = useRef<HTMLDivElement | null>(null);
+  // Legend below the grid — active categories only (a deactivated one might
+  // still colour an old booking's pill, but isn't worth explaining in a
+  // legend of what you can currently pick).
+  const guestCategoriesForLegend = useGuestCategories().filter((c) => c.active);
 
   // Room/Bed sticky label columns auto-narrow to fit whatever's actually on
   // screen, rather than a fixed width that either wastes space or clips a
@@ -660,20 +851,14 @@ export default function GridCanvas({ initialData, today }: { initialData: GridDa
   const [allocatingId, setAllocatingId] = useState<number | "bulk" | null>(null);
   const [actionsMenuOpen, setActionsMenuOpen] = useState(false);
   const [movesMenuOpen, setMovesMenuOpen] = useState(false);
-  const [settingsMenuOpen, setSettingsMenuOpen] = useState(false);
-  // Measured so the "booking details when hovering" preview's mock tooltip
-  // can start a few px past the actual rendered end of the preview name —
-  // a hardcoded percentage would drift out of sync the moment the name
-  // (or the font) changed.
-  const [previewNameWidth, setPreviewNameWidth] = useState(0);
-  // Which Display settings row (if either) the pointer is currently over —
-  // while hovering, that row's own preview shows what you'd GET by
-  // clicking (the opposite of the current setting), not the current
-  // setting itself. That's the whole point of hovering it: an instant
-  // "here's what turning this on/off looks like" even when nothing in the
-  // grid right now happens to demonstrate it (e.g. no booking currently in
-  // view has a Sleeps-near/Shares-bed pairing to look at).
-  const [hoveredPreviewToggle, setHoveredPreviewToggle] = useState<"sharesWith" | "hoverDetails" | null>(null);
+  // settingsMenuOpen/hoveredPreviewToggle/previewNameWidth used to live here
+  // but were purely local to the Display-settings dropdown's own UI — kept
+  // as state on the whole GridCanvas component, every hover/toggle inside
+  // that small menu forced React to reconcile the ENTIRE grid (rows aren't
+  // memoized/virtualized, only columns are — see virtualColumns), which is
+  // what made the preview feel slow to appear on any property with a lot of
+  // rows. Moved into GridSettingsMenu below so that re-render is scoped to
+  // just the dropdown itself.
   // Per-browser display preference, not per-user account data — a plain
   // "how do I want to look at the grid" toggle has no reason to round-trip
   // through the server or follow someone between machines. Read once on
@@ -1979,129 +2164,12 @@ export default function GridCanvas({ initialData, today }: { initialData: GridDa
             )}
           </div>
         )}
-        <div style={{ position: "relative" }}>
-          <button
-            type="button"
-            aria-label="Grid display settings"
-            data-tooltip="Grid display settings"
-            onClick={() => setSettingsMenuOpen((v) => !v)}
-            // height matches every other toolbar button's own real rendered
-            // height (40px, from the default button padding — see
-            // globals.css) rather than shrinking to the icon's own smaller
-            // natural size; padding trimmed down from the default 14px
-            // sides (sized for text) since a single icon doesn't need that
-            // much horizontal breathing room — it was rendering noticeably
-            // WIDER than tall, an odd shape next to square-ish icon
-            // buttons elsewhere.
-            style={{ height: 40, padding: "0 11px", display: "inline-flex", alignItems: "center" }}
-          >
-            <GearIcon size={18} />
-          </button>
-          {settingsMenuOpen && (
-            <>
-              <div style={{ position: "fixed", inset: 0, zIndex: 39 }} onClick={() => setSettingsMenuOpen(false)} />
-              <div className="tr-actions-menu tr-settings-menu" style={{ position: "absolute", top: "calc(100% + 6px)", left: 0, zIndex: 40 }}>
-                <div className="tr-actions-menu-title">Display settings</div>
-                <label
-                  className="tr-settings-toggle-row"
-                  onMouseEnter={() => setHoveredPreviewToggle("sharesWith")}
-                  onMouseLeave={() => setHoveredPreviewToggle((v) => (v === "sharesWith" ? null : v))}
-                >
-                  <input
-                    type="checkbox"
-                    checked={showSharesWithText}
-                    onChange={(e) => updateShowSharesWithText(e.target.checked)}
-                    className="tr-settings-checkbox"
-                  />
-                  <span className="tr-settings-toggle-label">
-                    <div style={{ fontWeight: 600 }}>&quot;Shares with&quot; info in grid</div>
-                    <div className="tr-muted" style={{ fontSize: 11, marginTop: 2 }}>
-                      Spells out &quot;(same bed as X)&quot; or &quot;(same room as X)&quot; on every pill with a Sleeps-near/Shares-bed pairing. Turn off to keep just the small icon.
-                    </div>
-                  </span>
-                  {/* Live preview, not a static screenshot — always matches what the toggle actually does, in both themes.
-                      "Nils" and "Hagai" — a small, harmless in-joke for whoever's staring at this menu long enough to
-                      notice, not real guest names anywhere else in the app. minWidth is sized for the LONGER
-                      (toggle-on) state specifically so the pill doesn't visibly resize when the "(same bed as X)"
-                      text appears/disappears — it should always look this wide. While the row is hovered, this shows
-                      what CLICKING would produce (the opposite of the current setting), not the current setting
-                      itself — an instant preview of the effect even when nothing in the real grid right now happens
-                      to demonstrate it. */}
-                  <div className="tr-settings-preview">
-                    <span className="tr-grid-booking-pill" style={{ position: "static", minWidth: 220 }}>
-                      <span className="tr-grid-pill-satisfied" aria-hidden="true">👥</span>
-                      <span className="tr-grid-pill-name">Nils</span>
-                      {(hoveredPreviewToggle === "sharesWith" ? !showSharesWithText : showSharesWithText) && (
-                        <span className="tr-grid-pill-relation">
-                          (same bed as <strong>Hagai</strong>)
-                        </span>
-                      )}
-                    </span>
-                  </div>
-                </label>
-                <label
-                  className="tr-settings-toggle-row"
-                  onMouseEnter={() => setHoveredPreviewToggle("hoverDetails")}
-                  onMouseLeave={() => setHoveredPreviewToggle((v) => (v === "hoverDetails" ? null : v))}
-                >
-                  <input
-                    type="checkbox"
-                    checked={showHoverDetails}
-                    onChange={(e) => updateShowHoverDetails(e.target.checked)}
-                    className="tr-settings-checkbox"
-                  />
-                  <span className="tr-settings-toggle-label">
-                    <div style={{ fontWeight: 600 }}>Booking details when hovering</div>
-                    <div className="tr-muted" style={{ fontSize: 11, marginTop: 2 }}>
-                      Shows the stay dates in a tooltip near the cursor when you hover a pill. The name&apos;s already on the pill, so it isn&apos;t repeated. Alerts keep their own hover text either way.
-                    </div>
-                  </span>
-                  {/* Same live-preview idea as the row above, but for the
-                      tooltip itself — reuses the real tooltip bubble class
-                      (see TooltipHost.tsx / globals.css) as a static mock.
-                      Deliberately a plain pill with no shares-with icon/text
-                      of its own — this toggle applies to every pill, shared
-                      or not, so the preview shouldn't imply it's specific to
-                      that case. Positioned a few px past the name's own
-                      measured width, vertically centered on the pill —
-                      roughly where a real cursor sits once you've actually
-                      read the name before pausing to hover. Shows the
-                      click-would-produce state while the row itself is
-                      hovered, same as the row above. */}
-                  <div className="tr-settings-preview">
-                    <span className="tr-grid-booking-pill" style={{ position: "relative", minWidth: 170 }}>
-                      <span
-                        className="tr-grid-pill-name"
-                        ref={(el) => {
-                          if (!el) return;
-                          const pillEl = el.closest<HTMLElement>(".tr-grid-booking-pill");
-                          if (!pillEl) return;
-                          setPreviewNameWidth(el.getBoundingClientRect().right - pillEl.getBoundingClientRect().left);
-                        }}
-                      >
-                        Donna
-                      </span>
-                      {(hoveredPreviewToggle === "hoverDetails" ? !showHoverDetails : showHoverDetails) && (
-                        <div
-                          className="tr-tooltip-bubble"
-                          style={{
-                            position: "absolute",
-                            top: "50%",
-                            left: previewNameWidth + 8,
-                            transform: "translateY(-100%)",
-                            whiteSpace: "nowrap",
-                          }}
-                        >
-                          06/08/2026 to 10/08/2026
-                        </div>
-                      )}
-                    </span>
-                  </div>
-                </label>
-              </div>
-            </>
-          )}
-        </div>
+        <GridSettingsMenu
+          showSharesWithText={showSharesWithText}
+          onShowSharesWithTextChange={updateShowSharesWithText}
+          showHoverDetails={showHoverDetails}
+          onShowHoverDetailsChange={updateShowHoverDetails}
+        />
         <span style={{ flex: 1 }} />
         <a href="/bookings/new?from=grid"><button type="button" className="primary">+ New booking</button></a>
         <button
@@ -2178,7 +2246,11 @@ export default function GridCanvas({ initialData, today }: { initialData: GridDa
               {visibleColumns.map((col) => (
                 <th
                   key={col.globalIndex}
-                  className={isWeekend(col.date) ? "tr-grid-weekend" : undefined}
+                  className={[
+                    isWeekend(col.date) && "tr-grid-weekend",
+                    isPastDay(col.date, today) && "tr-grid-past",
+                    col.date === today && "tr-grid-today",
+                  ].filter(Boolean).join(" ") || undefined}
                   style={{ width: COLUMN_WIDTH, minWidth: COLUMN_WIDTH, maxWidth: COLUMN_WIDTH }}
                 >
                   <div>{weekday(col.date)}</div>
@@ -2248,6 +2320,21 @@ export default function GridCanvas({ initialData, today }: { initialData: GridDa
           </tbody>
         </table>
       </div>
+
+      {guestCategoriesForLegend.length > 0 && (
+        <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8, marginTop: 12 }}>
+          <span className="tr-muted" style={{ fontSize: 12 }}>Guest type:</span>
+          {guestCategoriesForLegend.map((c) => (
+            <span
+              key={c.id}
+              className="tr-grid-booking-pill"
+              style={{ position: "static", ...bookingColourVars(c.colour) }}
+            >
+              {c.name}
+            </span>
+          ))}
+        </div>
+      )}
 
       <HelpButton title="Using the grid">
         Drag anywhere on the grid to pan. Double-click a free cell to start a new booking, or a booking to edit it.
@@ -3279,7 +3366,17 @@ function renderDepartingTail(
       // flush/bled on ITS right edge too (see renderBookingPill) — instead
       // of the two sitting in separate <td>s with a bare gap between them,
       // which read as a detached, floating box.
-      style={{ left: -3, width: COLUMN_WIDTH / 2 + 3, display: laterSibling ? "flex" : undefined, alignItems: "center", justifyContent: "flex-end" }}
+      style={{
+        left: -3,
+        width: COLUMN_WIDTH / 2 + 3,
+        display: laterSibling ? "flex" : undefined,
+        alignItems: "center",
+        justifyContent: "flex-end",
+        // Same override as the booking's own pill — see bookingColourVars.
+        // This tail is a separate DOM element (a different <td>), so it
+        // needs its own copy, not inherited.
+        ...bookingColourVars(booking.guestCategoryColour),
+      }}
       data-tooltip={laterSibling ? undefined : `${booking.guestName} - checks out today`}
       // See the identical comment on the "+" new-booking link in
       // renderSingleCell — without this, the viewport's own drag-to-pan
@@ -3291,6 +3388,12 @@ function renderDepartingTail(
         e.preventDefault();
         actions.navigate(editHref);
       }}
+      // Symmetric with the main pill's own onMouseEnter/onMouseLeave (see
+      // setOwnHoverHighlight) — hovering the tail should highlight the
+      // WHOLE booking, not just this half, same as hovering the main pill
+      // already does for the tail.
+      onMouseEnter={() => setOwnHoverHighlight(booking.id)}
+      onMouseLeave={() => clearOwnHoverHighlight(booking.id)}
     >
       {/* No name here — it's already shown once in the booking's own pill; this is just that same pill's visual tail. */}
       {laterSibling && (
@@ -3318,6 +3421,15 @@ function renderSingleCell(spec: CellSpec, actions: GridActions) {
   const classes = ["tr-grid-cell"];
   if (dividerClass) classes.push(dividerClass);
   if (extraClass) classes.push(extraClass);
+  // Unlike a booking pill (see renderBookingPill/renderRowCells), a free or
+  // inactive cell is NEVER colSpan'd across multiple dates — renderRowCells
+  // only groups consecutive BOOKED cells into one wide <td>; every other
+  // state goes through this function one date at a time. That makes past/
+  // today shading here as simple as the header's own isPastDay check (no
+  // gradient-offset math needed, unlike the weekend wallpaper below, which
+  // DOES need to survive being tiled under an arbitrarily wide booking pill).
+  if (isPastDay(col.date, actions.today)) classes.push("tr-grid-cell-past");
+  else if (col.date === actions.today) classes.push("tr-grid-cell-today");
   const weekendStyle = weekendOverlayVars(col.date);
 
   // A "free" cell can still carry a departing booking's half-cell tail (see
@@ -3373,39 +3485,46 @@ function renderSingleCell(spec: CellSpec, actions: GridActions) {
       onContextMenu={onContextMenu}
     >
       {departingBooking && renderDepartingTail(departingBooking, actions)}
-      <a
-        className="tr-grid-new"
-        draggable={false}
-        href={newBookingHref}
-        // CRITICAL: without this, the pointerdown bubbles to the grid
-        // viewport's own onPointerDown (drag-to-pan), which calls its OWN
-        // setPointerCapture on the SAME pointerId — capture is
-        // last-caller-wins, so the viewport silently steals every
-        // subsequent mouse/click/dblclick event, re-targeting them at the
-        // viewport <div> instead of this <a> (same fix onPillPointerDown
-        // already needed, and for the same reason — see its own comment).
-        // Without this, double-clicking a free cell to start a new booking
-        // silently does nothing at all.
-        onPointerDown={(e) => e.stopPropagation()}
-        // Single click is reserved for the grid's pan/click disambiguation
-        // and (once dragging lands) selection — only a double-click starts a
-        // new booking. The href is kept (rather than dropped) so opening in
-        // a new tab / copying the link still works via the browser's own
-        // context menu or a modifier-click. Navigation itself goes through
-        // Next's client-side router (actions.navigate) rather than a full
-        // page reload.
-        onClick={(e) => e.preventDefault()}
-        onDoubleClick={(e) => {
-          e.preventDefault();
-          actions.navigate(newBookingHref);
-        }}
-        // A departing guest's tail already claims the left half of this
-        // column (same-day checkout) — narrow the "start a new booking"
-        // affordance to the remaining right half so the two don't overlap.
-        style={departingBooking ? { position: "absolute", left: COLUMN_WIDTH / 2, right: 0, top: 0, bottom: 0 } : undefined}
-      >
-        +
-      </a>
+      {/* No "+" at all on a past day — see .tr-grid-cell-past's own comment;
+          a day that's visually "closed off" shouldn't still quietly accept
+          a new booking underneath that greyed surface. departingBooking's
+          tail (above) is unaffected — that's an existing booking's real
+          checkout record, not a new-booking affordance. */}
+      {!isPastDay(col.date, actions.today) && (
+        <a
+          className="tr-grid-new"
+          draggable={false}
+          href={newBookingHref}
+          // CRITICAL: without this, the pointerdown bubbles to the grid
+          // viewport's own onPointerDown (drag-to-pan), which calls its OWN
+          // setPointerCapture on the SAME pointerId — capture is
+          // last-caller-wins, so the viewport silently steals every
+          // subsequent mouse/click/dblclick event, re-targeting them at the
+          // viewport <div> instead of this <a> (same fix onPillPointerDown
+          // already needed, and for the same reason — see its own comment).
+          // Without this, double-clicking a free cell to start a new booking
+          // silently does nothing at all.
+          onPointerDown={(e) => e.stopPropagation()}
+          // Single click is reserved for the grid's pan/click disambiguation
+          // and (once dragging lands) selection — only a double-click starts a
+          // new booking. The href is kept (rather than dropped) so opening in
+          // a new tab / copying the link still works via the browser's own
+          // context menu or a modifier-click. Navigation itself goes through
+          // Next's client-side router (actions.navigate) rather than a full
+          // page reload.
+          onClick={(e) => e.preventDefault()}
+          onDoubleClick={(e) => {
+            e.preventDefault();
+            actions.navigate(newBookingHref);
+          }}
+          // A departing guest's tail already claims the left half of this
+          // column (same-day checkout) — narrow the "start a new booking"
+          // affordance to the remaining right half so the two don't overlap.
+          style={departingBooking ? { position: "absolute", left: COLUMN_WIDTH / 2, right: 0, top: 0, bottom: 0 } : undefined}
+        >
+          +
+        </a>
+      )}
     </td>
   );
 }
@@ -3549,10 +3668,11 @@ function clearPillDragVisuals() {
  * it. Capped to a third of the pill's own width so it never eats the whole
  * pill on something narrower than RESIZE_ZONE_PX * 2.
  */
-// Deliberately small — resizing a date edge is a rare gesture next to
-// center-grab (which handles both a bed-row change AND a date shift at
-// once), so almost the whole pill should read as "move."
-const RESIZE_ZONE_PX = 5;
+// Small — resizing a date edge is a rare gesture next to center-grab
+// (which handles both a bed-row change AND a date shift at once), so
+// most of the pill should read as "move." Wide enough to actually hit
+// with a mouse/trackpad (5px was below usable hover precision).
+const RESIZE_ZONE_PX = 10;
 function pillDragKindAtOffset(offsetX: number, width: number): PillDragKind {
   if (width <= 0) return "move";
   const zone = Math.min(RESIZE_ZONE_PX, width / 3);
@@ -4103,6 +4223,27 @@ function clearSiblingHoverHighlight(bookingId: number) {
 }
 
 /**
+ * Extends a booking's own :hover styling (border/shadow — see
+ * .tr-grid-pill-native-hover in globals.css) from whichever of its own
+ * pieces the mouse actually lands on (main pill or departing tail) to the
+ * OTHER piece too — plain CSS :hover only ever reaches the exact element
+ * under the cursor, never a sibling in a different <td>, which is why the
+ * highlight used to stop dead at the checkout-date seam. No head/tail seam
+ * variant needed the way setSiblingHoverHighlight's accent ring needs one
+ * (see applyPillHighlightClasses) — this is a plain border-colour/shadow
+ * match, not a ring, so it fuses cleanly across the existing -3px bleed
+ * overlap on its own. Reapplying the class to whichever element already
+ * has real :hover is harmless — same computed style either way, not
+ * additive.
+ */
+function setOwnHoverHighlight(bookingId: number) {
+  document.querySelectorAll<HTMLElement>(`[data-booking-id="${bookingId}"]`).forEach((el) => el.classList.add("tr-grid-pill-native-hover"));
+}
+function clearOwnHoverHighlight(bookingId: number) {
+  document.querySelectorAll<HTMLElement>(`[data-booking-id="${bookingId}"]`).forEach((el) => el.classList.remove("tr-grid-pill-native-hover"));
+}
+
+/**
  * A booking rendered once as a continuous rounded pill spanning every
  * consecutive visible date it covers, instead of repeating the guest name
  * (and arrival/departure marks as raw "<"/"/" characters) in every night's
@@ -4128,6 +4269,20 @@ function renderBookingPill(run: CellSpec[], actions: GridActions) {
   const classes = ["tr-grid-cell", "tr-grid-booking-cell"];
   if (first.dividerClass) classes.push(first.dividerClass);
   if (first.extraClass) classes.push(first.extraClass);
+  // This <td>'s own background is normally fully hidden behind the pill
+  // (see .tr-grid-booking-pill's own "deliberately flat, no weekend
+  // gradient" note — the pill itself never shows past/today shading, same
+  // as it never shows weekend shading). It DOES peek through in one spot,
+  // though: leftInset below leaves the LEFT HALF of the arrival day's own
+  // column bare whenever there's no same-day departingBooking filling it —
+  // without this, that sliver stayed whatever the room tint/weekend
+  // pattern was, so today's pink (or a past day's hatch) silently never
+  // appeared on any cell that happened to have a booking starting in it.
+  // Only first.col.date (the run's own start date) can ever produce that
+  // gap — every later date in a multi-night run is fully covered by the
+  // pill itself, so there's nothing to key this off but the run's start.
+  if (isPastDay(first.col.date, actions.today)) classes.push("tr-grid-cell-past");
+  else if (first.col.date === actions.today) classes.push("tr-grid-cell-today");
   // A narrow (short-stay) pill's trailing » chevron is pinned to the
   // pill's true right edge (margin-left: auto — see the icon itself,
   // below), which can push it past this <td>'s own boundary into the
@@ -4238,8 +4393,9 @@ function renderBookingPill(run: CellSpec[], actions: GridActions) {
         className={pillClasses.join(" ")}
         // Right edge is always handled by the (now unconditional)
         // tr-pill-continues-end class's `!important` rule, not inline —
-        // see the pillClasses comment above.
-        style={{ left: leftInset }}
+        // see the pillClasses comment above. See bookingColourVars for why
+        // both --tr-booking-color and --tr-booking-fill get set here.
+        style={{ left: leftInset, ...bookingColourVars(booking.guestCategoryColour) }}
         // Single click is reserved for drag disambiguation — only a
         // double-click (no real drag happened) opens the edit page. A drag
         // that actually moved the pointer is consumed entirely by
@@ -4268,8 +4424,14 @@ function renderBookingPill(run: CellSpec[], actions: GridActions) {
         // being hovered, which visibly clashed with its own border and, for
         // two same-day-turnover parts sitting flush against each other,
         // pinched into a figure-eight where the two rings met.
-        onMouseEnter={() => siblings.filter((s) => s.id !== booking.id).forEach((s) => setSiblingHoverHighlight(s.id))}
-        onMouseLeave={() => siblings.filter((s) => s.id !== booking.id).forEach((s) => clearSiblingHoverHighlight(s.id))}
+        onMouseEnter={() => {
+          siblings.filter((s) => s.id !== booking.id).forEach((s) => setSiblingHoverHighlight(s.id));
+          setOwnHoverHighlight(booking.id);
+        }}
+        onMouseLeave={() => {
+          siblings.filter((s) => s.id !== booking.id).forEach((s) => clearSiblingHoverHighlight(s.id));
+          clearOwnHoverHighlight(booking.id);
+        }}
       >
         {!startsHere && (
           <span className="tr-grid-pill-chevron" aria-hidden="true">‹</span>
@@ -4319,6 +4481,16 @@ function renderBookingPill(run: CellSpec[], actions: GridActions) {
             </span>
           )
         )}
+        {booking.notes && (
+          // Placed right before the name, like the ⚠/👥 icons above — NOT
+          // the note text itself (that would compete with the guest name
+          // for the pill's limited width). Hover/tap for the full text via
+          // the shared tooltip system, which has no clipping problem here
+          // even though the pill's own <td> is overflow: hidden.
+          <span className="tr-grid-pill-note-icon" aria-hidden="true" data-tooltip={booking.notes}>
+            📝
+          </span>
+        )}
         <span className="tr-grid-pill-name">{pillDisplayName(booking)}</span>
         {booking.relationship && actions.showSharesWithText && (
           <span className="tr-grid-pill-relation">
@@ -4352,14 +4524,6 @@ function renderBookingPill(run: CellSpec[], actions: GridActions) {
         )}
         {!endsHere && (
           <span className="tr-grid-pill-chevron" aria-hidden="true">›</span>
-        )}
-        {booking.notes && (
-          // A folded-corner marker, like an Excel cell comment — deliberately
-          // NOT the note text itself (that would compete with the guest name
-          // for the pill's limited width); hover/tap for the full text via
-          // the shared tooltip system, which has no clipping problem here
-          // even though the pill's own <td> is overflow: hidden.
-          <span className="tr-grid-pill-note-corner" aria-hidden="true" data-tooltip={booking.notes} />
         )}
       </a>
     </td>
@@ -4406,7 +4570,7 @@ function renderEventLaneCells(
           band.continuesBefore ? "tr-grid-event-open-start" : "",
           band.continuesAfter ? "tr-grid-event-open-end" : "",
         ].filter(Boolean).join(" ")}
-        style={{ ...eventColourStyle(band.event.id), top: laneTop }}
+        style={{ ...eventColourStyle(band.event.id, band.event.colour), top: laneTop }}
         data-tooltip={`${band.event.name} - ${formatDateUk(band.event.startDate)} to ${formatDateUk(band.event.endDate)}${band.event.notes ? `\n${band.event.notes}` : ""}`}
         onContextMenu={(e) => {
           actions.openMenu(e, band.event.name, [

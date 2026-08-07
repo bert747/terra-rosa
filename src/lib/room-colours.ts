@@ -4,8 +4,11 @@
 // The grid shows one row per bed, so a room with six beds is six adjacent
 // rows. Without banding it's genuinely hard to tell, scanning down a column,
 // where the dorm ends and the next room starts. Each room therefore gets a
-// tint from this palette, cycled by position in the room list, and every bed
-// row belonging to that room carries it.
+// tint from this palette, alternating by position in the room list (a plain
+// odd/even zebra stripe — simpler to scan at a glance than the wider cycling
+// palette this replaced, which used a distinct colour per room and read as
+// "a bunch of different tones" rather than a clear grouping cue), and every
+// bed row belonging to that room carries it.
 //
 // Two shades per entry:
 //   * `tint`  — very light, used behind free bed/night cells. It has to sit
@@ -26,15 +29,7 @@ export interface RoomColour {
 
 const PALETTE: RoomColour[] = [
   { tint: "#f7f5f3", label: "#e7e2dc" }, // warm stone
-  { tint: "#f8f4f0", label: "#ecdfd2" }, // pale taupe
-  { tint: "#f9f6ec", label: "#efe6cc" }, // soft ecru
   { tint: "#f1f4f7", label: "#dde6ee" }, // muted slate
-  { tint: "#f5f3ef", label: "#e4ddd0" }, // subtle greige
-  { tint: "#f2f6ef", label: "#dde8d2" }, // dusty sage
-  { tint: "#f9f1ee", label: "#edd9d0" }, // soft clay
-  { tint: "#f9f5ee", label: "#ede0c8" }, // warm sand
-  { tint: "#f1f5ee", label: "#dde6d3" }, // faded moss
-  { tint: "#f6f4f1", label: "#e6dfd6" }, // pale mushroom
 ];
 
 /** The colour pair for the room at `index` in the displayed room order. */
@@ -75,13 +70,24 @@ const EVENT_PALETTE: EventColour[] = [
   { bg: "#d5ebef", border: "#84b3bb" },
 ];
 
-/** Stable band colour for an event, keyed off its id so it never shuffles. */
+/** Stable fallback band colour for an event with no colour of its own yet, keyed off its id so it never shuffles. */
 export function eventColour(eventId: number): EventColour {
   return EVENT_PALETTE[Math.abs(eventId) % EVENT_PALETTE.length];
 }
 
-export function eventColourStyle(eventId: number): React.CSSProperties {
-  const { bg, border } = eventColour(eventId);
+/**
+ * A staff-picked colour (see events.colour) wins when set; otherwise falls
+ * back to the old hash-based auto-pick above. The background is derived
+ * from the picked colour with the same 24%-mix-with-white formula used
+ * everywhere else a single colour needs a pale fill (see GridCanvas.tsx's
+ * bookingColourVars and BookingsTable.tsx's row tint) — one consistent
+ * "how colour works" rule across the app rather than a different formula
+ * per feature.
+ */
+export function eventColourStyle(eventId: number, colour: string | null): React.CSSProperties {
+  const { bg, border } = colour
+    ? { bg: `color-mix(in srgb, ${colour} 24%, white)`, border: colour }
+    : eventColour(eventId);
   return {
     ["--tr-event-bg" as string]: bg,
     ["--tr-event-border" as string]: border,

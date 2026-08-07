@@ -43,15 +43,18 @@ export interface HousekeepingSheet {
   roomsToMake: RoomBedCount[];
 }
 
-/** Whatever room a bed sits in as of `date`, per bed_locations. */
-async function currentRoomIdFor(bedId: number, date: ISODate): Promise<number | null> {
-  const [seg] = await db
-    .select({ roomId: bedLocations.roomId })
-    .from(bedLocations)
-    .where(and(eq(bedLocations.bedId, bedId), eq(bedLocations.startDate, date)));
-  if (seg) return seg.roomId;
-  const rows = await db.select().from(bedLocations).where(eq(bedLocations.bedId, bedId));
-  const active = rows.find((r) => r.startDate <= date && (r.endDate == null || r.endDate > date));
+type BedLocationRow = { bedId: number; roomId: number; startDate: ISODate; endDate: ISODate | null };
+
+/**
+ * Whatever room a bed sits in as of `date`, per bed_locations — looked up
+ * against an already-fetched full table (see buildHousekeepingSheet, which
+ * calls this several times per date and previously re-queried the database
+ * on every call).
+ */
+function currentRoomIdFor(bedId: number, date: ISODate, allLocations: BedLocationRow[]): number | null {
+  const exact = allLocations.find((r) => r.bedId === bedId && r.startDate === date);
+  if (exact) return exact.roomId;
+  const active = allLocations.find((r) => r.bedId === bedId && r.startDate <= date && (r.endDate == null || r.endDate > date));
   return active?.roomId ?? null;
 }
 
@@ -197,6 +200,7 @@ export async function buildHousekeepingSheet(date: ISODate): Promise<Housekeepin
     departingToday,
     eventsOngoingToday,
     rawMoves,
+    allBedLocations,
   ] = await Promise.all([
     loadGridData(date, 1),
     db.select().from(rooms),
@@ -212,6 +216,11 @@ export async function buildHousekeepingSheet(date: ISODate): Promise<Housekeepin
     // the two boundary days.
     db.select().from(events).where(and(lte(events.startDate, date), gte(events.endDate, date))),
     collectRawMoves(date),
+    // Fetched once, up front — currentRoomIdFor is called several times per
+    // date below (arrivals, Beds to Make, join start/end folds); resolving
+    // each call against this in-memory set instead of re-querying avoids an
+    // N+1 pattern for what's really a handful of lookups against one table.
+    db.select().from(bedLocations),
   ]);
 
   // A join row whose endDate isn't strictly after its startDate is
@@ -254,16 +263,6 @@ export async function buildHousekeepingSheet(date: ISODate): Promise<Housekeepin
   void soloStartingToday;
   void soloEndingToday;
 
-  const arrivals: ArrivalEntry[] = [];
-  for (const b of arrivingToday) {
-    const roomId = b.bedId != null ? await currentRoomIdFor(b.bedId, date) : null;
-    arrivals.push({
-      guestName: b.guestName,
-      roomName: roomId != null ? roomNameById.get(roomId) ?? "Unassigned" : "Unassigned",
-    });
-  }
-  arrivals.sort((a, b) => a.roomName.localeCompare(b.roomName) || a.guestName.localeCompare(b.guestName));
-
   const departures: DepartureEntry[] = departingToday
     .map((b) => ({ guestName: b.guestName }))
     .sort((a, b) => a.guestName.localeCompare(b.guestName));
@@ -289,8 +288,17 @@ export async function buildHousekeepingSheet(date: ISODate): Promise<Housekeepin
   // physical bed made up — without this, each arrival independently folds
   // to "Double" and the pair gets counted twice ("2 of 1", nonsensical).
   const countedDoublePairs = new Set<string>();
+  // Single pass over arrivingToday covers both the Arrivals list and the
+  // "made" fold below — both need the same per-booking roomId, previously
+  // resolved via two separate loops each re-deriving it.
+  const arrivals: ArrivalEntry[] = [];
   for (const b of arrivingToday) {
-    const roomId = b.bedId != null ? await currentRoomIdFor(b.bedId, date) : null;
+    const roomId = b.bedId != null ? currentRoomIdFor(b.bedId, date, allBedLocations) : null;
+    arrivals.push({
+      guestName: b.guestName,
+      roomName: roomId != null ? roomNameById.get(roomId) ?? "Unassigned" : "Unassigned",
+    });
+
     if (roomId == null) continue;
     const bedType = housekeepingBedType(b.bedId);
     if (bedType === "Double" && b.bedId != null) {
@@ -305,16 +313,18 @@ export async function buildHousekeepingSheet(date: ISODate): Promise<Housekeepin
     }
     addMade(roomId, bedType);
   }
+  arrivals.sort((a, b) => a.roomName.localeCompare(b.roomName) || a.guestName.localeCompare(b.guestName));
+
   for (const j of joinsStartingTodayValid) {
     if (j.mode !== "double") continue;
     if (arrivalBedIds.has(j.bed1Id) || arrivalBedIds.has(j.bed2Id)) continue; // already folded into "Double" above
-    const roomId = rawMoves.find((m) => m.bedId === j.bed1Id)?.toRoomId ?? (await currentRoomIdFor(j.bed1Id, date));
+    const roomId = rawMoves.find((m) => m.bedId === j.bed1Id)?.toRoomId ?? currentRoomIdFor(j.bed1Id, date, allBedLocations);
     if (roomId == null) continue;
     addMade(roomId, "Double");
   }
   for (const j of joinsEndingTodayValid) {
     if (j.mode !== "double") continue;
-    const roomId = await currentRoomIdFor(j.bed1Id, date);
+    const roomId = currentRoomIdFor(j.bed1Id, date, allBedLocations);
     if (roomId == null) continue;
     addMade(roomId, "Single", 2);
   }

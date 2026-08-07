@@ -3,12 +3,13 @@ import { db } from "@/db";
 import { rooms } from "@/db/schema";
 import { requireEditor } from "@/lib/auth";
 import { logChange } from "@/lib/change-log";
+import { sortRooms } from "@/lib/rooms";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
   const rows = await db.select().from(rooms);
-  return NextResponse.json(rows);
+  return NextResponse.json(sortRooms(rows));
 }
 
 export async function POST(req: NextRequest) {

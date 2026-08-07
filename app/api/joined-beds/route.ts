@@ -4,6 +4,7 @@ import { beds, bedLocations, bookings, joinedBeds, rooms } from "@/db/schema";
 import { requireEditor } from "@/lib/auth";
 import { logChange } from "@/lib/change-log";
 import { and, eq, gt, isNull, inArray, lt, or } from "drizzle-orm";
+import { coversDate, unassignSoloOverlap } from "@/lib/joined-beds";
 
 export const dynamic = "force-dynamic";
 
@@ -11,10 +12,6 @@ const FAR_FUTURE = "9999-12-31";
 
 function todayISO(): string {
   return new Date().toISOString().slice(0, 10);
-}
-
-function coversDate(startDate: string, endDate: string | null, date: string): boolean {
-  return startDate <= date && (endDate == null || endDate > date);
 }
 
 // Joins that haven't fully ended yet — currently active or scheduled for a
@@ -194,19 +191,7 @@ export async function POST(req: NextRequest) {
     .values({ bed1Id, bed2Id, startDate, endDate: effectiveEndDate, mode })
     .returning();
 
-  let unassignedBookings: (typeof bookings.$inferSelect)[] = [];
-  if (mode === "solo") {
-    unassignedBookings = await db
-      .select()
-      .from(bookings)
-      .where(and(eq(bookings.bedId, bed2Id), lt(bookings.arrivalDate, newEndBound), gt(bookings.departureDate, startDate)));
-    if (unassignedBookings.length > 0) {
-      await db
-        .update(bookings)
-        .set({ bedId: null })
-        .where(and(eq(bookings.bedId, bed2Id), lt(bookings.arrivalDate, newEndBound), gt(bookings.departureDate, startDate)));
-    }
-  }
+  const unassignedBookings = mode === "solo" ? await unassignSoloOverlap(bed2Id, startDate, newEndBound) : [];
 
   const [room] = await db.select({ name: rooms.name }).from(rooms).where(eq(rooms.id, room1));
   await logChange({

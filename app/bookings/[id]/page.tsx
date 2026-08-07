@@ -10,6 +10,8 @@ import AllocationIssuesPanel from "@/components/AllocationIssuesPanel";
 import ConfirmModal, { type ConfirmModalState } from "@/components/ConfirmModal";
 import SplitMergeConflictModal, { type SplitMergeConflictModalState } from "@/components/SplitMergeConflictModal";
 import { useDietaryTagSuggestions } from "@/lib/use-dietary-tag-suggestions";
+import { useGuestCategories } from "@/lib/use-guest-categories";
+import GuestTypeSelect from "@/components/GuestTypeSelect";
 
 interface BedOption {
   id: number;
@@ -45,7 +47,7 @@ interface Booking {
   splitGroupId: number | null;
   bedId: number | null;
   dietariesTags: string[] | null;
-  guestType: string;
+  guestCategoryId: number | null;
   allocationIssues: { otherBookingId: number; otherGuestName: string; kind: "room" | "bed" }[];
 }
 
@@ -56,13 +58,6 @@ interface SplitSibling {
   departureDate: string;
   bedId: number | null;
 }
-
-const GUEST_TYPES: { value: string; label: string }[] = [
-  { value: "guest", label: "Guest" },
-  { value: "resident", label: "Resident" },
-  { value: "ashrami", label: "Ashrami" },
-  { value: "friends_family", label: "Friends & Family" },
-];
 
 interface Draft {
   firstName: string;
@@ -77,7 +72,7 @@ interface Draft {
   bedTypeFilter: "single" | "double";
   bedId: string;
   partnerBedId: string;
-  guestType: string;
+  guestCategoryId: string;
 }
 
 export default function BookingDetailPage() {
@@ -96,6 +91,21 @@ export default function BookingDetailPage() {
   const [draft, setDraft] = useState<Draft | null>(null);
   const [dietaryTags, setDietaryTags] = useState<string[]>([]);
   const dietarySuggestions = useDietaryTagSuggestions();
+  const allGuestCategories = useGuestCategories();
+  // Active categories, plus this booking's own current one even if it's
+  // since been deactivated — otherwise editing an older booking tagged
+  // with a now-deleted category would show a blank/mismatched dropdown
+  // instead of the category it's actually still set to.
+  const guestCategoryOptions = allGuestCategories.filter(
+    (c) => c.active || c.id === booking?.guestCategoryId
+  );
+  // Live preview of the currently-selected guest type's colour on the form
+  // card itself (see the tr-card below) — reflects whatever's picked in the
+  // dropdown right now, not just the last-saved value, same as any other
+  // unsaved draft field on this page.
+  const draftGuestCategoryColour = draft?.guestCategoryId
+    ? allGuestCategories.find((c) => String(c.id) === draft.guestCategoryId)?.colour ?? null
+    : null;
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [siblings, setSiblings] = useState<SplitSibling[]>([]);
@@ -141,7 +151,7 @@ export default function BookingDetailPage() {
       bedTypeFilter,
       bedId: b.bedId ? String(b.bedId) : "",
       partnerBedId: "",
-      guestType: b.guestType ?? "guest",
+      guestCategoryId: b.guestCategoryId ? String(b.guestCategoryId) : "",
     });
     setRefreshToken((t) => t + 1);
   }
@@ -198,7 +208,7 @@ export default function BookingDetailPage() {
       (booking.linkedBookingId ?? null) !== draft.linkedBookingId ||
       (booking.sharesBedWithBookingId ?? null) !== draft.sharesBedWithBookingId ||
       (booking.bedId ? String(booking.bedId) : "") !== draft.bedId ||
-      booking.guestType !== draft.guestType ||
+      (booking.guestCategoryId ? String(booking.guestCategoryId) : "") !== draft.guestCategoryId ||
       JSON.stringify(booking.dietariesTags ?? []) !== JSON.stringify(dietaryTags)
     );
   }, [booking, draft, dietaryTags]);
@@ -241,7 +251,7 @@ export default function BookingDetailPage() {
         departureDate: draft.departureDate,
         linkedBookingId: draft.linkedBookingId,
         bedId: directPairOccupant ? (booking?.bedId ?? null) : draft.bedId || null,
-        guestType: draft.guestType,
+        guestCategoryId: draft.guestCategoryId || null,
         propagateGuestType: propagateGuestType === true,
         dietariesTags: dietaryTags.length > 0 ? dietaryTags : null,
       }),
@@ -319,7 +329,8 @@ export default function BookingDetailPage() {
   // AND the value actually changed — a no-op change or a plain, unsplit
   // booking just saves straight through.
   function requestSave(onDone: (ok: boolean) => void) {
-    const guestTypeChanged = !!booking && !!draft && booking.guestType !== draft.guestType;
+    const guestTypeChanged =
+      !!booking && !!draft && (booking.guestCategoryId ? String(booking.guestCategoryId) : "") !== draft.guestCategoryId;
     if (booking?.splitGroupId != null && guestTypeChanged) {
       setConfirmModal({
         title: "Guest type changed",
@@ -455,7 +466,20 @@ export default function BookingDetailPage() {
       {error && <p className="tr-badge tr-badge-warn" style={{ marginBottom: 12 }}>{error}</p>}
       <AllocationIssuesPanel bookingId={booking.id} issues={booking.allocationIssues} onApplied={load} />
 
-      <div className="tr-card">
+      <div
+        className="tr-card"
+        style={
+          draftGuestCategoryColour
+            ? // An inset shadow is clipped to the element's own border-radius
+              // (see .tr-card's 12px) automatically, so this curves with the
+              // card's corners rather than looking like a sharp bar laid on
+              // top. Layered alongside .tr-card's own drop shadow (see that
+              // rule in globals.css) since setting box-shadow here replaces
+              // it rather than adding to it.
+              { boxShadow: `inset 0 16px 0 ${draftGuestCategoryColour}, 0 6px 18px rgba(70, 54, 31, 0.06)` }
+            : undefined
+        }
+      >
         <div className="tr-inline-grid-3">
           <Field label="First name">
             <input value={draft.firstName} onChange={(e) => setDraft({ ...draft, firstName: e.target.value })} />
@@ -480,11 +504,11 @@ export default function BookingDetailPage() {
             <DateField value={draft.departureDate} onChange={(iso) => setDraft({ ...draft, departureDate: iso })} />
           </Field>
           <Field label="Guest type">
-            <select value={draft.guestType} onChange={(e) => setDraft({ ...draft, guestType: e.target.value })}>
-              {GUEST_TYPES.map((g) => (
-                <option key={g.value} value={g.value}>{g.label}</option>
-              ))}
-            </select>
+            <GuestTypeSelect
+              categories={guestCategoryOptions}
+              value={draft.guestCategoryId}
+              onChange={(v) => setDraft({ ...draft, guestCategoryId: v })}
+            />
           </Field>
         </div>
 
@@ -551,7 +575,7 @@ export default function BookingDetailPage() {
           <textarea
             value={draft.notes}
             onChange={(e) => setDraft({ ...draft, notes: e.target.value })}
-            placeholder="Optional — shown as a corner marker on the grid pill"
+            placeholder="Optional — shown as an icon on the grid pill"
             rows={2}
             style={{ resize: "vertical" }}
           />

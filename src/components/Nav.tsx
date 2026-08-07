@@ -2,15 +2,18 @@ import Link from "next/link";
 import { getCurrentUser } from "@/lib/auth";
 import NavTabs, { type NavLink } from "@/components/NavTabs";
 
-const LINKS: NavLink[] = [
+// Every logged-in user gets Daily Sheet — it's the one page a viewer is
+// allowed to see (see the matching redirect in grid/bookings/events/
+// settings/users/history's own layouts), so it's the only link shown
+// unconditionally rather than living in LINKS below.
+const VIEWER_LINKS: NavLink[] = [{ href: "/daily-sheet", label: "Daily Sheet" }];
+
+// Editor-only sections, appended for editors.
+const EDITOR_LINKS: NavLink[] = [
   { href: "/grid", label: "Grid" },
   { href: "/bookings", label: "Bookings" },
   { href: "/events", label: "Events" },
   { href: "/daily-sheet", label: "Daily Sheet" },
-];
-
-// Editor-only sections, appended to LINKS for editors.
-const EDITOR_LINKS: NavLink[] = [
   { href: "/settings/layout", label: "Layout" },
   { href: "/history", label: "History" },
   { href: "/users", label: "Users" },
@@ -23,7 +26,7 @@ export default async function Nav() {
     <nav className="tr-nav tr-no-print">
       <div className="tr-nav-left">
         <strong className="tr-nav-brand">Terra Rosa</strong>
-        <NavTabs links={[...LINKS, ...(user?.role === "editor" ? EDITOR_LINKS : [])]} />
+        <NavTabs links={user?.role === "editor" ? EDITOR_LINKS : VIEWER_LINKS} />
       </div>
       <span style={{ flex: 1 }} />
       {user ? (

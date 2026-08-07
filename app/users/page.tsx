@@ -10,6 +10,7 @@ interface User {
   name: string;
   email: string;
   role: "editor" | "viewer";
+  mustChangePassword: boolean;
   createdAt: string;
 }
 
@@ -69,16 +70,29 @@ export default function UsersPage() {
     );
   }
 
-  async function resetPassword(user: User) {
-    const password = window.prompt(
-      `New password for ${user.email} (min ${MIN_PASSWORD_LENGTH} characters):`
-    );
-    if (!password) return;
-    await mutate(
-      `/api/users/${user.id}`,
-      { method: "PATCH", body: JSON.stringify({ password }) },
-      `Password reset for ${user.email}. Tell them their new password.`
-    );
+  function resetPassword(user: User) {
+    setConfirmState({
+      title: "Reset password?",
+      message: `Generates a new temporary password for ${user.email} and forces them to choose their own at next login. Their current password stops working immediately.`,
+      confirmLabel: "Reset",
+      onConfirm: async () => {
+        setError(null);
+        setNotice(null);
+        const res = await fetch(`/api/users/${user.id}/reset-password`, { method: "POST" });
+        if (!res.ok) {
+          setError((await res.json().catch(() => ({}))).error ?? "Could not reset password.");
+          return;
+        }
+        const { tempPassword } = await res.json();
+        // A real blocking popup rather than the page's own notice banner
+        // (easy to miss/scroll past) — shown once, here, and never stored
+        // or logged anywhere else. Same "editor hands it over out of band"
+        // pattern as before, just with a generated password and a forced
+        // change instead of a hand-typed one with no forcing function.
+        window.alert(`Temporary password for ${user.email}: ${tempPassword} — they'll be asked to set their own at next login. Tell them now; this won't be shown again.`);
+        load();
+      },
+    });
   }
 
   function removeUser(user: User) {
@@ -121,7 +135,14 @@ export default function UsersPage() {
                   {u.name}
                   {u.id === me && <span className="tr-muted"> (you)</span>}
                 </td>
-                <td>{u.email}</td>
+                <td>
+                  {u.email}
+                  {u.mustChangePassword && (
+                    <span className="tr-badge tr-badge-warn" style={{ marginLeft: 6, fontSize: 11 }} data-tooltip="Using a temporary password — will be asked to set their own at next login">
+                      pending
+                    </span>
+                  )}
+                </td>
                 <td>
                   <select value={u.role} onChange={(e) => changeRole(u, e.target.value)}>
                     <option value="editor">editor</option>

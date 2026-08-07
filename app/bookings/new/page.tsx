@@ -8,6 +8,8 @@ import DateField from "@/components/DateField";
 import SharesWithSelect, { SharesWithMode } from "@/components/SharesWithSelect";
 import ConfirmModal, { type ConfirmModalState } from "@/components/ConfirmModal";
 import { useDietaryTagSuggestions } from "@/lib/use-dietary-tag-suggestions";
+import { useGuestCategories } from "@/lib/use-guest-categories";
+import GuestTypeSelect from "@/components/GuestTypeSelect";
 
 interface BedOption {
   id: number;
@@ -28,13 +30,6 @@ interface FallbackPair {
   roomId: number;
   roomName: string;
 }
-
-const GUEST_TYPES: { value: string; label: string }[] = [
-  { value: "guest", label: "Guest" },
-  { value: "resident", label: "Resident" },
-  { value: "ashrami", label: "Ashrami" },
-  { value: "friends_family", label: "Friends & Family" },
-];
 
 export default function NewBookingPage() {
   return (
@@ -86,10 +81,16 @@ function NewBookingForm() {
     bedTypeFilter: "single" as "single" | "double",
     bedId: prefillBedId,
     partnerBedId: "" as string,
-    guestType: "guest",
+    guestCategoryId: "" as string,
   });
   const [dietaryTags, setDietaryTags] = useState<string[]>([]);
   const dietarySuggestions = useDietaryTagSuggestions();
+  const guestCategories = useGuestCategories().filter((c) => c.active);
+  // Live preview of the selected guest type's colour — see the identical
+  // pattern (and its own longer comment) on the booking edit page.
+  const selectedGuestCategoryColour = form.guestCategoryId
+    ? guestCategories.find((c) => String(c.id) === form.guestCategoryId)?.colour ?? null
+    : null;
 
   useEffect(() => {
     if (!isIsoDate(form.arrivalDate) || !isIsoDate(form.departureDate) || form.departureDate <= form.arrivalDate) {
@@ -178,7 +179,7 @@ function NewBookingForm() {
         linkedBookingId: form.sharesWithMode === "room" ? form.sharesWithId : null,
         bedId: directPairOccupant ? null : form.bedId || null,
         partnerBedId: form.partnerBedId || null,
-        guestType: form.guestType,
+        guestCategoryId: form.guestCategoryId || null,
         dietariesTags: dietaryTags.length > 0 ? dietaryTags : null,
       }),
     });
@@ -233,7 +234,15 @@ function NewBookingForm() {
       {error && <p className="tr-badge tr-badge-warn" style={{ marginBottom: 12 }}>{error}</p>}
       <ConfirmModal state={confirmModal} onClose={() => setConfirmModal(null)} />
 
-      <form onSubmit={handleSubmit} className="tr-card">
+      <form
+        onSubmit={handleSubmit}
+        className="tr-card"
+        style={
+          selectedGuestCategoryColour
+            ? { boxShadow: `inset 0 16px 0 ${selectedGuestCategoryColour}, 0 6px 18px rgba(70, 54, 31, 0.06)` }
+            : undefined
+        }
+      >
         <div className="tr-inline-grid-3">
           <Field label="First name" required>
             <input
@@ -262,11 +271,11 @@ function NewBookingForm() {
             <DateField required value={form.departureDate} onChange={(iso) => setForm({ ...form, departureDate: iso })} />
           </Field>
           <Field label="Guest type">
-            <select value={form.guestType} onChange={(e) => setForm({ ...form, guestType: e.target.value })}>
-              {GUEST_TYPES.map((g) => (
-                <option key={g.value} value={g.value}>{g.label}</option>
-              ))}
-            </select>
+            <GuestTypeSelect
+              categories={guestCategories}
+              value={form.guestCategoryId}
+              onChange={(v) => setForm({ ...form, guestCategoryId: v })}
+            />
           </Field>
         </div>
 
@@ -352,7 +361,7 @@ function NewBookingForm() {
           <textarea
             value={form.notes}
             onChange={(e) => setForm({ ...form, notes: e.target.value })}
-            placeholder="Optional — shown as a corner marker on the grid pill"
+            placeholder="Optional — shown as an icon on the grid pill"
             rows={2}
             style={{ resize: "vertical" }}
           />

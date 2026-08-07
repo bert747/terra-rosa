@@ -4,6 +4,7 @@ import { events } from "@/db/schema";
 import { requireEditor } from "@/lib/auth";
 import { logChange } from "@/lib/change-log";
 import { asc } from "drizzle-orm";
+import { parseEventBody } from "@/lib/events";
 
 export const dynamic = "force-dynamic";
 
@@ -18,11 +19,7 @@ export async function POST(req: NextRequest) {
   } catch {
     return NextResponse.json({ error: "Editor role required" }, { status: 403 });
   }
-  const body = await req.json();
-  const name = String(body.name ?? "").trim();
-  const startDate = String(body.startDate ?? "");
-  const endDate = String(body.endDate ?? "");
-  const notes = String(body.notes ?? "").trim() || null;
+  const { name, startDate, endDate, notes, colour } = parseEventBody(await req.json());
   if (!name || !startDate || !endDate) {
     return NextResponse.json({ error: "name, startDate and endDate are required" }, { status: 400 });
   }
@@ -35,7 +32,7 @@ export async function POST(req: NextRequest) {
       { status: 400 }
     );
   }
-  const [row] = await db.insert(events).values({ name, startDate, endDate, notes }).returning();
+  const [row] = await db.insert(events).values({ name, startDate, endDate, notes, colour: colour ?? null }).returning();
   await logChange({ category: "events", action: "Created event", summary: `Created event "${name}", ${startDate} to ${endDate}` });
   return NextResponse.json(row, { status: 201 });
 }

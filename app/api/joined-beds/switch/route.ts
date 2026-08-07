@@ -1,16 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
-import { bookings, joinedBeds } from "@/db/schema";
+import { joinedBeds } from "@/db/schema";
 import { requireEditor } from "@/lib/auth";
-import { and, eq, gt, isNull, lt, or } from "drizzle-orm";
+import { eq } from "drizzle-orm";
+import { findActiveJoin, unassignSoloOverlap } from "@/lib/joined-beds";
 
 export const dynamic = "force-dynamic";
 
 const FAR_FUTURE = "9999-12-31";
-
-function coversDate(startDate: string, endDate: string | null, date: string): boolean {
-  return startDate <= date && (endDate == null || endDate > date);
-}
 
 // Switches an ALREADY-joined pair's mode at `atDate` in one step: ends
 // whichever segment currently covers that date and starts a new one there
@@ -37,19 +34,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Mode must be 'double' or 'solo'" }, { status: 400 });
   }
 
-  const candidates = await db
-    .select()
-    .from(joinedBeds)
-    .where(
-      and(
-        or(
-          and(eq(joinedBeds.bed1Id, bed1Id), eq(joinedBeds.bed2Id, bed2Id)),
-          and(eq(joinedBeds.bed1Id, bed2Id), eq(joinedBeds.bed2Id, bed1Id))
-        ),
-        or(isNull(joinedBeds.endDate), gt(joinedBeds.endDate, atDate))
-      )
-    );
-  const active = candidates.find((j) => coversDate(j.startDate, j.endDate, atDate));
+  const active = await findActiveJoin(bed1Id, bed2Id, atDate);
   if (!active) {
     return NextResponse.json({ error: "No active join covers that date" }, { status: 404 });
   }
@@ -70,20 +55,8 @@ export async function POST(req: NextRequest) {
     .values({ bed1Id: active.bed1Id, bed2Id: active.bed2Id, startDate: atDate, endDate: priorEndDate, mode })
     .returning();
 
-  let unassignedBookings: (typeof bookings.$inferSelect)[] = [];
-  if (mode === "solo") {
-    const endBound = priorEndDate ?? FAR_FUTURE;
-    unassignedBookings = await db
-      .select()
-      .from(bookings)
-      .where(and(eq(bookings.bedId, active.bed2Id), lt(bookings.arrivalDate, endBound), gt(bookings.departureDate, atDate)));
-    if (unassignedBookings.length > 0) {
-      await db
-        .update(bookings)
-        .set({ bedId: null })
-        .where(and(eq(bookings.bedId, active.bed2Id), lt(bookings.arrivalDate, endBound), gt(bookings.departureDate, atDate)));
-    }
-  }
+  const unassignedBookings =
+    mode === "solo" ? await unassignSoloOverlap(active.bed2Id, atDate, priorEndDate ?? FAR_FUTURE) : [];
 
   return NextResponse.json({ ...created, unassignedBookings });
 }

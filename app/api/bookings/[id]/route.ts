@@ -61,8 +61,8 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   if (body.splitGroupId !== undefined) {
     updates.splitGroupId = body.splitGroupId ? Number(body.splitGroupId) : null;
   }
-  if (body.guestType !== undefined && ["resident", "ashrami", "guest", "friends_family"].includes(body.guestType)) {
-    updates.guestType = body.guestType;
+  if (body.guestCategoryId !== undefined) {
+    updates.guestCategoryId = body.guestCategoryId ? Number(body.guestCategoryId) : null;
   }
 
   const [existing] = await db.select().from(bookings).where(eq(bookings.id, bookingId));
@@ -113,13 +113,13 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   // A split-into-parts stay is still the SAME physical guest throughout —
   // their name, dietary needs and notes don't change from one part to the
   // next, only the dates/bed (each part's own segment) and, deliberately,
-  // guestType do. Propagate whichever of those identity fields this PATCH
-  // actually touched to every other part of the same split so they can
-  // never drift apart into looking like different people. guestType is the
-  // one exception raised explicitly by staff — see propagateGuestType
-  // below — since a stay can plausibly change classification partway
-  // through (e.g. a guest becoming a resident) and that's a real,
-  // segment-specific fact, not just data hygiene.
+  // guestCategoryId do. Propagate whichever of those identity fields this
+  // PATCH actually touched to every other part of the same split so they
+  // can never drift apart into looking like different people.
+  // guestCategoryId is the one exception raised explicitly by staff — see
+  // propagateGuestType below — since a stay can plausibly change
+  // classification partway through (e.g. a guest becoming a resident) and
+  // that's a real, segment-specific fact, not just data hygiene.
   if (row.splitGroupId != null) {
     const siblingUpdates: Partial<typeof bookings.$inferInsert> = {};
     if (updates.firstName !== undefined) siblingUpdates.firstName = updates.firstName;
@@ -128,7 +128,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     if (updates.preferredName !== undefined) siblingUpdates.preferredName = updates.preferredName;
     if (updates.notes !== undefined) siblingUpdates.notes = updates.notes;
     if (updates.dietariesTags !== undefined) siblingUpdates.dietariesTags = updates.dietariesTags;
-    if (updates.guestType !== undefined && body.propagateGuestType === true) siblingUpdates.guestType = updates.guestType;
+    if (updates.guestCategoryId !== undefined && body.propagateGuestType === true) siblingUpdates.guestCategoryId = updates.guestCategoryId;
 
     if (Object.keys(siblingUpdates).length > 0) {
       await db
@@ -142,7 +142,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   if (updates.firstName !== undefined || updates.lastName !== undefined || updates.preferredName !== undefined) changedParts.push("name");
   if (updates.arrivalDate !== undefined || updates.departureDate !== undefined) changedParts.push("dates");
   if (updates.bedId !== undefined) changedParts.push("bed");
-  if (updates.guestType !== undefined) changedParts.push("guest type");
+  if (updates.guestCategoryId !== undefined) changedParts.push("guest type");
   if (updates.dietariesTags !== undefined) changedParts.push("dietary tags");
   if (updates.notes !== undefined) changedParts.push("notes");
   if (updates.linkedBookingId !== undefined || updates.sharesBedWithBookingId !== undefined) changedParts.push("sharing/linking");

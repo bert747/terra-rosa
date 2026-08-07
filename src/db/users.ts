@@ -11,5 +11,6 @@ export const publicUserColumns = {
   name: users.name,
   email: users.email,
   role: users.role,
+  mustChangePassword: users.mustChangePassword,
   createdAt: users.createdAt,
 };

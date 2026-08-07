@@ -1,5 +1,5 @@
 import { db } from "@/db";
-import { beds, bedLocations, bedSoloPeriods, bookings, floors, joinedBeds, rooms } from "@/db/schema";
+import { beds, bedLocations, bedSoloPeriods, bookings, floors, guestCategories, joinedBeds, rooms } from "@/db/schema";
 import { and, eq, gt, isNull, lt, or } from "drizzle-orm";
 import { DORM_STORAGE_FLOOR_NAME, DORM_STORAGE_ROOM_NAME } from "@/lib/dorm-storage";
 import {
@@ -57,6 +57,46 @@ export interface GridData {
   splitGroups: Record<string, SplitSiblingBooking[]>;
   /** Target room id for the grid's "Send to Dorm Storage" bed action. */
   dormStorageRoomId: number;
+}
+
+/**
+ * Reconstructs connected groups of allocation issues — every issue is
+ * flagged on BOTH bookings it involves (see findAllocationIssues), so the
+ * issues list alone already contains every edge needed to reconstruct
+ * connected groups, no extra query. Three people all missing the same
+ * requirement reads as one line, not three. Shared by loadGridData (scoped
+ * to the viewed window) and GET /api/alerts (unscoped, every current/future
+ * issue), which both need the exact same grouping logic.
+ */
+export function buildIssueGroups(issues: IssueAlert[]): IssueGroup[] {
+  const guestNameById = new Map(issues.map((i) => [i.id, i.guestName]));
+  const adjacency = new Map<number, Set<number>>();
+  for (const i of issues) {
+    for (const rel of i.issues) {
+      if (!adjacency.has(i.id)) adjacency.set(i.id, new Set());
+      adjacency.get(i.id)!.add(rel.otherBookingId);
+    }
+  }
+  const visited = new Set<number>();
+  const groups: IssueGroup[] = [];
+  for (const i of issues) {
+    if (visited.has(i.id)) continue;
+    const stack = [i.id];
+    const memberIds: number[] = [];
+    visited.add(i.id);
+    while (stack.length > 0) {
+      const cur = stack.pop()!;
+      memberIds.push(cur);
+      for (const next of adjacency.get(cur) ?? []) {
+        if (!visited.has(next)) {
+          visited.add(next);
+          stack.push(next);
+        }
+      }
+    }
+    groups.push({ bookingId: memberIds[0], guestNames: memberIds.map((id) => guestNameById.get(id) ?? "?") });
+  }
+  return groups;
 }
 
 /**
@@ -167,9 +207,17 @@ export async function loadGridData(start: ISODate, days: number): Promise<GridDa
       splitGroupId: bookings.splitGroupId,
       linkedBookingId: bookings.linkedBookingId,
       sharesBedWithBookingId: bookings.sharesBedWithBookingId,
+      guestCategoryId: bookings.guestCategoryId,
     })
     .from(bookings)
     .where(and(lt(bookings.arrivalDate, windowEnd), gt(bookings.departureDate, start)));
+
+  // Colour lookup for the pill — see GridBooking.guestCategoryColour. Loads
+  // every category (not just active ones) since an existing booking can
+  // still be tagged with a since-deactivated category and must keep
+  // showing its colour.
+  const guestCategoryRows = await db.select({ id: guestCategories.id, colour: guestCategories.colour }).from(guestCategories);
+  const guestCategoryColourById = new Map(guestCategoryRows.map((c) => [c.id, c.colour]));
 
   // A "Sleeps near"/"Shares bed with" partner can fall outside the current
   // window (already checked out, or arriving later than what's loaded) —
@@ -192,7 +240,12 @@ export async function loadGridData(start: ISODate, days: number): Promise<GridDa
 
   const gridBookings: GridBooking[] = bookingRows
     .filter((b): b is typeof b & { bedId: number } => b.bedId != null)
-    .map((b) => ({ ...b, allocationIssues: allocationIssues.get(b.id) ?? [], relationship: relationshipFor(b) }));
+    .map((b) => ({
+      ...b,
+      allocationIssues: allocationIssues.get(b.id) ?? [],
+      relationship: relationshipFor(b),
+      guestCategoryColour: b.guestCategoryId != null ? guestCategoryColourById.get(b.guestCategoryId) ?? null : null,
+    }));
 
   const grid = buildRoomGrid(dates, roomsForGrid, gridBedInfos, gridLocationSegments, gridJoinSegments, gridSoloSegments, gridBookings, capacities, today);
   const { occupied: occupiedByDate, total: totalByDate } = capacityByDate(dates, grid);
@@ -217,40 +270,7 @@ export async function loadGridData(start: ISODate, days: number): Promise<GridDa
     .filter((b) => (allocationIssues.get(b.id) ?? []).length > 0)
     .map((b) => ({ id: b.id, guestName: b.guestName, issues: allocationIssues.get(b.id)! }));
 
-  // Every issue is flagged on BOTH bookings it involves (see
-  // findAllocationIssues), so the issues list alone already contains every
-  // edge needed to reconstruct connected groups — no extra query. Three
-  // people all missing the same requirement reads as one line, not three.
-  const issueGroups: IssueGroup[] = (() => {
-    const guestNameById = new Map(issues.map((i) => [i.id, i.guestName]));
-    const adjacency = new Map<number, Set<number>>();
-    for (const i of issues) {
-      for (const rel of i.issues) {
-        if (!adjacency.has(i.id)) adjacency.set(i.id, new Set());
-        adjacency.get(i.id)!.add(rel.otherBookingId);
-      }
-    }
-    const visited = new Set<number>();
-    const groups: IssueGroup[] = [];
-    for (const i of issues) {
-      if (visited.has(i.id)) continue;
-      const stack = [i.id];
-      const memberIds: number[] = [];
-      visited.add(i.id);
-      while (stack.length > 0) {
-        const cur = stack.pop()!;
-        memberIds.push(cur);
-        for (const next of adjacency.get(cur) ?? []) {
-          if (!visited.has(next)) {
-            visited.add(next);
-            stack.push(next);
-          }
-        }
-      }
-      groups.push({ bookingId: memberIds[0], guestNames: memberIds.map((id) => guestNameById.get(id) ?? "?") });
-    }
-    return groups;
-  })();
+  const issueGroups: IssueGroup[] = buildIssueGroups(issues);
 
   return { start, days, dates, grid, eventLanes, arrByDate, depByDate, occupiedByDate, totalByDate, alerts, issues, issueGroups, plannedChanges, splitGroups, dormStorageRoomId };
 }

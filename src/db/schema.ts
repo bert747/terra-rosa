@@ -31,6 +31,12 @@ export const users = pgTable("users", {
   role: text("role", { enum: ["editor", "viewer"] })
     .notNull()
     .default("editor"),
+  // Set whenever an editor resets someone's password to a server-generated
+  // temporary one (see POST /api/users/[id]/reset-password) — forces that
+  // user through /change-password on their next login before they can reach
+  // anywhere else, then gets cleared. Never set for a normal self-chosen
+  // password change.
+  mustChangePassword: boolean("must_change_password").notNull().default(false),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 }, (table) => ({
   emailIdx: uniqueIndex("users_email_idx").on(table.email),
@@ -61,6 +67,24 @@ export const roomCategories = pgTable("room_categories", {
   rank: integer("rank").notNull().default(0),
 });
 
+// The admin-editable list of guest types (e.g. "Resident", "Ashrami",
+// "Guest") a booking can be tagged with — drives both the grid pill's
+// colour and the guest-type dropdown on the booking form. `active` is a
+// soft-delete flag rather than a real row delete: "deleting" a category
+// from Layout settings should stop it being offered for NEW bookings
+// without touching the colour/label on any EXISTING booking still
+// referencing it (bookings.guestCategoryId keeps pointing at the row).
+export const guestCategories = pgTable("guest_categories", {
+  id: serial("id").primaryKey(),
+  name: text("name").notNull(),
+  // A CSS colour (hex) used for both the grid pill's fill and its border —
+  // see --tr-booking-color/--tr-booking-fill in globals.css for the single
+  // hardcoded colour this replaces.
+  colour: text("colour").notNull(),
+  rank: integer("rank").notNull().default(0),
+  active: boolean("active").notNull().default(true),
+});
+
 export const rooms = pgTable("rooms", {
   id: serial("id").primaryKey(),
   floorId: integer("floor_id")
@@ -79,8 +103,8 @@ export const rooms = pgTable("rooms", {
   categoryId: integer("category_id").references((): AnyPgColumn => roomCategories.id, { onDelete: "set null" }),
   // Never offered as a Fix/move-suggestion target, full stop, regardless of
   // category — the owner's own room, the chef's room, the caravan, and (for
-  // now — see the friends_family guest type) the rooms only ever used for
-  // friends & family guests, which staff still place by hand.
+  // now — see the "Friends & Family" guest category) the rooms only ever
+  // used for friends & family guests, which staff still place by hand.
   excludeFromSuggestions: boolean("exclude_from_suggestions").notNull().default(false),
 });
 
@@ -202,7 +226,10 @@ export const bookings = pgTable("bookings", {
   splitGroupId: integer("split_group_id").references((): AnyPgColumn => bookings.id, { onDelete: "set null" }),
   bedId: integer("bed_id").references(() => beds.id, { onDelete: "set null" }),
   dietariesTags: jsonb("dietaries_tags"),
-  guestType: text("guest_type", { enum: ["resident", "ashrami", "guest", "friends_family"] }).notNull().default("guest"),
+  // Nullable on purpose — a future bulk-imported booking may arrive with no
+  // known guest type at all, needing manual assignment afterward rather
+  // than being forced into a fake default. See guestCategories above.
+  guestCategoryId: integer("guest_category_id").references((): AnyPgColumn => guestCategories.id, { onDelete: "set null" }),
   // A free-text staff note, surfaced on the grid pill as a small folded-
   // corner marker (like an Excel cell comment) rather than always-visible
   // text — for anything worth flagging on a specific booking (a request, a
@@ -292,6 +319,11 @@ export const events = pgTable("events", {
   startDate: date("start_date").notNull(),
   endDate: date("end_date").notNull(),
   notes: text("notes"),
+  // Nullable — an event created before this existed (or one nobody's
+  // bothered to colour yet) falls back to the old hash-based auto-pick from
+  // EVENT_PALETTE (see src/lib/room-colours.ts's eventColour), so nothing
+  // needs backfilling.
+  colour: text("colour"),
 });
 
 // One free-text note per calendar date, for manual overrides on the Meals

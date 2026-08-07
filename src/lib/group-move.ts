@@ -25,8 +25,8 @@ export interface GroupMoveProposal {
  * — an unplaced target means there's no room to be full of in the first
  * place, so the caller never has a reason to call this without one.
  */
-export async function resolveExistingGroup(nearBookingId: number): Promise<BookingRow[]> {
-  const [linked] = await db.select().from(bookings).where(eq(bookings.id, nearBookingId));
+export async function resolveExistingGroup(nearBookingId: number, preloaded?: BookingRow): Promise<BookingRow[]> {
+  const linked = preloaded ?? (await db.select().from(bookings).where(eq(bookings.id, nearBookingId)))[0];
   if (!linked || linked.bedId == null) return [];
   const group = [linked];
   if (linked.sharesBedWithBookingId != null) {

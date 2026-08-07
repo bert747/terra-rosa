@@ -11,11 +11,16 @@ export const dynamic = "force-dynamic";
 const INITIAL_FETCH_DAYS = 60;
 
 export default async function GridPage() {
+  let user;
   try {
-    await requireUser();
+    user = await requireUser();
   } catch {
     redirect("/login");
   }
+  if (user.mustChangePassword) redirect("/change-password");
+  // Viewers only get Daily Sheet — see the same check on bookings/events/
+  // settings/users/history's own layouts.
+  if (user.role === "viewer") redirect("/daily-sheet");
 
   const today = new Date().toISOString().slice(0, 10);
   const initialStart = addDays(today, -Math.floor(INITIAL_FETCH_DAYS / 2));

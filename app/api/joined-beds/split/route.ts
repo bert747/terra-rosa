@@ -3,13 +3,10 @@ import { db } from "@/db";
 import { bookings, joinedBeds } from "@/db/schema";
 import { requireEditor } from "@/lib/auth";
 import { logChange } from "@/lib/change-log";
-import { and, eq, gt, inArray, isNull, or } from "drizzle-orm";
+import { and, eq, gt, inArray } from "drizzle-orm";
+import { findActiveJoin } from "@/lib/joined-beds";
 
 export const dynamic = "force-dynamic";
-
-function coversDate(startDate: string, endDate: string | null, date: string): boolean {
-  return startDate <= date && (endDate == null || endDate > date);
-}
 
 // Ends whichever join segment covers `atDate` for this pair of beds — used
 // by the grid's right-click "Split into Singles" action, which doesn't know
@@ -30,19 +27,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "bed1Id, bed2Id and atDate are required" }, { status: 400 });
   }
 
-  const candidates = await db
-    .select()
-    .from(joinedBeds)
-    .where(
-      and(
-        or(
-          and(eq(joinedBeds.bed1Id, bed1Id), eq(joinedBeds.bed2Id, bed2Id)),
-          and(eq(joinedBeds.bed1Id, bed2Id), eq(joinedBeds.bed2Id, bed1Id))
-        ),
-        or(isNull(joinedBeds.endDate), gt(joinedBeds.endDate, atDate))
-      )
-    );
-  const active = candidates.find((j) => coversDate(j.startDate, j.endDate, atDate));
+  const active = await findActiveJoin(bed1Id, bed2Id, atDate);
   if (!active) {
     return NextResponse.json({ error: "No active join covers that date" }, { status: 404 });
   }

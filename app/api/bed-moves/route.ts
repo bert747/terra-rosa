@@ -10,6 +10,11 @@ import {
 
 export const dynamic = "force-dynamic";
 
+/** The day after the last of `affected`'s bookings departs — the earliest date a blocked change could still happen. */
+function latestPushedDate(affected: { departureDate: string }[]): string {
+  return affected.reduce((max, a) => (a.departureDate > max ? a.departureDate : max), affected[0].departureDate);
+}
+
 // Cancels (or delays — see below) one or more planned changes (see
 // findPlannedChanges) — body is `{ bedLocationIds?: number[],
 // joinCancellations?: { id: number; kind: "start" | "end" }[], confirmed?:
@@ -53,8 +58,7 @@ export async function DELETE(req: NextRequest) {
   if (!confirmed && action === "cancel") {
     const affected = await findBookingsAffectedByCancel(bedLocationIds, joinCancellations);
     if (affected.length > 0) {
-      const pushedDate = affected.reduce((max, a) => (a.departureDate > max ? a.departureDate : max), affected[0].departureDate);
-      return NextResponse.json({ affected, pushedDate }, { status: 409 });
+      return NextResponse.json({ affected, pushedDate: latestPushedDate(affected) }, { status: 409 });
     }
   }
 
@@ -63,7 +67,7 @@ export async function DELETE(req: NextRequest) {
     if (affected.length === 0) {
       return NextResponse.json({ error: "Nothing to delay — this change no longer conflicts with anything." }, { status: 400 });
     }
-    const pushedDate = affected.reduce((max, a) => (a.departureDate > max ? a.departureDate : max), affected[0].departureDate);
+    const pushedDate = latestPushedDate(affected);
     const delayed = bedLocationIds.length > 0 ? await delayPlannedMoves(bedLocationIds, pushedDate) : [];
     const delayedJoins = [];
     for (const c of joinCancellations) {

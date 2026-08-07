@@ -6,6 +6,8 @@ import DateField from "@/components/DateField";
 import HelpButton from "@/components/HelpButton";
 import ConfirmModal, { type ConfirmModalState } from "@/components/ConfirmModal";
 import { DORM_STORAGE_FLOOR_NAME } from "@/lib/dorm-storage";
+import { sortRooms } from "@/lib/rooms";
+import ColourPicker from "@/components/ColourPicker";
 
 function todayISO(): string {
   return new Date().toISOString().slice(0, 10);
@@ -30,6 +32,14 @@ interface RoomCategory {
   id: number;
   name: string;
   rank: number;
+}
+
+interface GuestCategory {
+  id: number;
+  name: string;
+  colour: string;
+  rank: number;
+  active: boolean;
 }
 
 interface BedPlacement {
@@ -62,6 +72,7 @@ export default function PropertyLayoutPage() {
   const [beds, setBeds] = useState<Bed[]>([]);
   const [bedTypes, setBedTypes] = useState<BedType[]>([]);
   const [categories, setCategories] = useState<RoomCategory[]>([]);
+  const [guestCategories, setGuestCategories] = useState<GuestCategory[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
 
@@ -106,18 +117,20 @@ export default function PropertyLayoutPage() {
   const [addingType, setAddingType] = useState(false);
 
   async function load() {
-    const [f, r, b, t, c] = await Promise.all([
+    const [f, r, b, t, c, gc] = await Promise.all([
       fetch("/api/floors").then((res) => res.json()),
       fetch("/api/rooms").then((res) => res.json()),
       fetch("/api/beds").then((res) => res.json()),
       fetch("/api/bed-types").then((res) => res.json()),
       fetch("/api/room-categories").then((res) => res.json()),
+      fetch("/api/guest-categories").then((res) => res.json()),
     ]);
     setFloors(f);
     setRooms(r);
     setBeds(b);
     setBedTypes(t);
     setCategories(c);
+    setGuestCategories(gc);
   }
 
   useEffect(() => {
@@ -185,13 +198,10 @@ export default function PropertyLayoutPage() {
   }
 
   function toggleEditMode() {
-    setEditMode((v) => {
-      // Turning edit ON while floors sit collapsed would hide the very
-      // rooms you'd want to rename/delete, forcing a manual expand first —
-      // just expand everything the moment edit mode opens.
-      if (!v) expandAllFloors();
-      return !v;
-    });
+    // Only reveals per-row edit controls on floors/rooms that are already
+    // expanded — leaves each floor's collapsed/expanded state untouched.
+    // Use "Expand all" separately if you want everything open first.
+    setEditMode((v) => !v);
   }
 
   // --- Floors ---------------------------------------------------------
@@ -358,6 +368,7 @@ export default function PropertyLayoutPage() {
   const [categoryEditValue, setCategoryEditValue] = useState("");
   const [draggingCategoryId, setDraggingCategoryId] = useState<number | null>(null);
   const [dragOverCategoryId, setDragOverCategoryId] = useState<number | null>(null);
+  const [addingRoomsToCategoryId, setAddingRoomsToCategoryId] = useState<number | null>(null);
 
   async function submitNewCategory(e: React.FormEvent) {
     e.preventDefault();
@@ -439,6 +450,136 @@ export default function PropertyLayoutPage() {
         c.rank === i
           ? Promise.resolve()
           : fetch(`/api/room-categories/${c.id}`, {
+              method: "PATCH",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ rank: i }),
+            })
+      )
+    );
+    load();
+  }
+
+  // --- Guest categories (see guestCategories' own schema comment) --------
+
+  const [addingGuestCategory, setAddingGuestCategory] = useState(false);
+  const [newGuestCategoryName, setNewGuestCategoryName] = useState("");
+  const [newGuestCategoryColour, setNewGuestCategoryColour] = useState("#8a7360");
+  const [editingGuestCategoryId, setEditingGuestCategoryId] = useState<number | null>(null);
+  const [guestCategoryEditValue, setGuestCategoryEditValue] = useState("");
+  const [draggingGuestCategoryId, setDraggingGuestCategoryId] = useState<number | null>(null);
+  const [dragOverGuestCategoryId, setDragOverGuestCategoryId] = useState<number | null>(null);
+  const [editingGuestCategoryColourId, setEditingGuestCategoryColourId] = useState<number | null>(null);
+
+  // Same colour-var pattern as GridCanvas.tsx's bookingColourVars — sets
+  // BOTH --tr-booking-color and --tr-booking-fill directly (rather than
+  // relying on --tr-booking-fill's own color-mix() to pick up a nested
+  // override), since browsers don't re-resolve that nested var() against a
+  // closer override on the same element. See that function's own longer
+  // comment for the full story.
+  function guestCategoryColourVars(colour: string): React.CSSProperties {
+    return {
+      ["--tr-booking-color" as string]: colour,
+      ["--tr-booking-fill" as string]: `color-mix(in srgb, ${colour} 24%, white)`,
+    } as React.CSSProperties;
+  }
+
+  async function submitNewGuestCategory(e: React.FormEvent) {
+    e.preventDefault();
+    const name = newGuestCategoryName.trim();
+    if (!name) return;
+    const ok = await withError(() =>
+      fetch("/api/guest-categories", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, colour: newGuestCategoryColour }),
+      })
+    );
+    if (ok) {
+      setNewGuestCategoryName("");
+      setNewGuestCategoryColour("#8a7360");
+      setAddingGuestCategory(false);
+      load();
+    }
+  }
+
+  function startEditGuestCategory(cat: GuestCategory) {
+    setEditingGuestCategoryId(cat.id);
+    setGuestCategoryEditValue(cat.name);
+  }
+
+  async function submitGuestCategoryEdit(e: React.FormEvent, cat: GuestCategory) {
+    e.preventDefault();
+    const name = guestCategoryEditValue.trim();
+    if (!name || name === cat.name) {
+      setEditingGuestCategoryId(null);
+      return;
+    }
+    const ok = await withError(() =>
+      fetch(`/api/guest-categories/${cat.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      })
+    );
+    setEditingGuestCategoryId(null);
+    if (ok) load();
+  }
+
+  async function setGuestCategoryColour(cat: GuestCategory, colour: string) {
+    const ok = await withError(() =>
+      fetch(`/api/guest-categories/${cat.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ colour }),
+      })
+    );
+    if (ok) load();
+  }
+
+  function deleteGuestCategory(cat: GuestCategory) {
+    // A soft delete (see the API route's own comment) — existing bookings
+    // tagged with this category keep their colour/label, it just stops
+    // being offered for new/changed bookings from here on. No "N bookings
+    // use this" warning needed the way room-category delete has one, since
+    // nothing about those bookings actually changes.
+    setConfirmState({
+      title: "Delete guest category?",
+      message: `Delete "${cat.name}"? Existing bookings tagged with it keep their colour — it just won't be offered for new ones.`,
+      confirmLabel: "Delete",
+      onConfirm: async () => {
+        const ok = await withError(() => fetch(`/api/guest-categories/${cat.id}`, { method: "DELETE" }));
+        if (ok) load();
+      },
+    });
+  }
+
+  async function restoreGuestCategory(cat: GuestCategory) {
+    const ok = await withError(() =>
+      fetch(`/api/guest-categories/${cat.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ active: true }),
+      })
+    );
+    if (ok) load();
+  }
+
+  async function handleGuestCategoryDrop(targetId: number) {
+    setDragOverGuestCategoryId(null);
+    if (!draggingGuestCategoryId || draggingGuestCategoryId === targetId) return;
+    const ordered = [...guestCategories].sort((a, b) => a.rank - b.rank);
+    const fromIndex = ordered.findIndex((c) => c.id === draggingGuestCategoryId);
+    const toIndex = ordered.findIndex((c) => c.id === targetId);
+    if (fromIndex === -1 || toIndex === -1) return;
+    const [moved] = ordered.splice(fromIndex, 1);
+    ordered.splice(toIndex, 0, moved);
+    setDraggingGuestCategoryId(null);
+    setGuestCategories(ordered.map((c, i) => ({ ...c, rank: i })));
+    await Promise.all(
+      ordered.map((c, i) =>
+        c.rank === i
+          ? Promise.resolve()
+          : fetch(`/api/guest-categories/${c.id}`, {
               method: "PATCH",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ rank: i }),
@@ -762,6 +903,12 @@ export default function PropertyLayoutPage() {
           </ul>
         </div>
 
+        {/* Bed Inventory + Room Categories share this column's flex stack
+            so Room Categories always sits directly below Bed Inventory,
+            regardless of how tall Floors & Rooms (the other grid column)
+            currently is — grid auto-placement would otherwise put this
+            card under Floors & Rooms instead. */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
         {/* --- Bed inventory --------------------------------------------- */}
         <div className="tr-card">
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
@@ -998,10 +1145,30 @@ export default function PropertyLayoutPage() {
                             {roomCount} room{roomCount === 1 ? "" : "s"}
                           </span>
                         </span>
-                        <div style={{ display: "flex", gap: 6 }}>
-                          <button type="button" onClick={() => startEditCategory(cat)}>Rename</button>
-                          <button type="button" className="tr-danger" onClick={() => deleteCategory(cat)}>Delete</button>
-                        </div>
+                        {addingRoomsToCategoryId === cat.id ? (
+                          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                            <select
+                              autoFocus
+                              value=""
+                              onChange={(e) => {
+                                const room = rooms.find((r) => r.id === Number(e.target.value));
+                                if (room) setRoomCategory(room, cat.id);
+                              }}
+                            >
+                              <option value="" disabled>Add a room…</option>
+                              {sortRooms(rooms.filter((r) => r.categoryId !== cat.id)).map((room) => (
+                                <option key={room.id} value={room.id}>{room.name}</option>
+                              ))}
+                            </select>
+                            <button type="button" onClick={() => setAddingRoomsToCategoryId(null)}>Done</button>
+                          </div>
+                        ) : (
+                          <div style={{ display: "flex", gap: 6 }}>
+                            <button type="button" onClick={() => setAddingRoomsToCategoryId(cat.id)}>+ Add rooms</button>
+                            <button type="button" onClick={() => startEditCategory(cat)}>Rename</button>
+                            <button type="button" className="tr-danger" onClick={() => deleteCategory(cat)}>Delete</button>
+                          </div>
+                        )}
                       </>
                     )}
                   </li>
@@ -1028,6 +1195,139 @@ export default function PropertyLayoutPage() {
               </button>
             )}
           </div>
+        </div>
+
+        {/* --- Guest categories -------------------------------------------
+            Drives the grid pill's colour (see guestCategoryColour on
+            GridBooking) as well as the guest-type dropdown on the booking
+            form. Same add/rename/drag-reorder pattern as Room Categories
+            above, plus a colour swatch per row and soft-delete (see the
+            API route's own comment on why "Delete" doesn't remove the row). */}
+        <div className="tr-card">
+          <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 10 }}>
+            <h2 className="tr-section-title" style={{ margin: 0 }}>Guest Categories</h2>
+            <span
+              aria-hidden="true"
+              className="tr-muted"
+              data-tooltip="Sets the colour a booking's pill shows on the grid, based on its guest type. Deleting one just stops it being offered for new bookings — existing bookings keep their colour."
+              style={{ cursor: "help", fontSize: 13, border: "1px solid var(--tr-border)", borderRadius: "50%", width: 16, height: 16, display: "inline-flex", alignItems: "center", justifyContent: "center" }}
+            >
+              ?
+            </span>
+          </div>
+
+          {guestCategories.length === 0 && !addingGuestCategory && (
+            <p className="tr-muted" style={{ fontSize: 13 }}>No guest categories yet.</p>
+          )}
+
+          <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
+            {[...guestCategories]
+              .sort((a, b) => a.rank - b.rank)
+              .map((cat) => (
+                <li
+                  key={cat.id}
+                  draggable={cat.active}
+                  onDragStart={() => setDraggingGuestCategoryId(cat.id)}
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    if (dragOverGuestCategoryId !== cat.id) setDragOverGuestCategoryId(cat.id);
+                  }}
+                  onDragLeave={() => setDragOverGuestCategoryId((id) => (id === cat.id ? null : id))}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    handleGuestCategoryDrop(cat.id);
+                  }}
+                  onDragEnd={() => {
+                    setDraggingGuestCategoryId(null);
+                    setDragOverGuestCategoryId(null);
+                  }}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 8,
+                    borderTop: "1px solid var(--tr-border)",
+                    padding: "6px 4px",
+                    cursor: cat.active ? "grab" : "default",
+                    opacity: draggingGuestCategoryId === cat.id ? 0.4 : cat.active ? 1 : 0.5,
+                    background: dragOverGuestCategoryId === cat.id && draggingGuestCategoryId !== cat.id ? "var(--tr-accent-soft)" : undefined,
+                  }}
+                >
+                  <span aria-hidden="true" className="tr-muted" style={{ fontSize: 12, letterSpacing: "-1px" }}>
+                    {cat.active ? "⠿" : ""}
+                  </span>
+                  {editingGuestCategoryId === cat.id ? (
+                    <form onSubmit={(e) => submitGuestCategoryEdit(e, cat)} style={{ display: "flex", gap: 6, flex: 1 }}>
+                      <input
+                        autoFocus
+                        value={guestCategoryEditValue}
+                        onChange={(e) => setGuestCategoryEditValue(e.target.value)}
+                        style={{ flex: 1 }}
+                      />
+                      <button type="submit" className="primary">Save</button>
+                      <button type="button" onClick={() => setEditingGuestCategoryId(null)}>Cancel</button>
+                    </form>
+                  ) : (
+                    <>
+                      <span style={{ flex: 1, position: "relative" }}>
+                        {/* The pill itself (same look as the grid legend/pills) doubles as the
+                            colour-change trigger — click to open a ColourPicker popover, rather
+                            than a separate square swatch next to plain name text. */}
+                        <button
+                          type="button"
+                          className="tr-grid-booking-pill"
+                          disabled={!cat.active}
+                          onClick={() => setEditingGuestCategoryColourId((id) => (id === cat.id ? null : cat.id))}
+                          style={{ position: "static", cursor: cat.active ? "pointer" : "default", ...guestCategoryColourVars(cat.colour) }}
+                        >
+                          {cat.name}
+                        </button>
+                        {!cat.active && <span className="tr-muted" style={{ fontSize: 11, marginLeft: 6 }}>(deleted)</span>}
+                        {editingGuestCategoryColourId === cat.id && (
+                          <>
+                            <div style={{ position: "fixed", inset: 0, zIndex: 29 }} onClick={() => setEditingGuestCategoryColourId(null)} />
+                            <div className="tr-actions-menu" style={{ position: "absolute", top: "calc(100% + 4px)", left: 0, zIndex: 30, padding: 8 }}>
+                              <ColourPicker value={cat.colour} onChange={(hex) => setGuestCategoryColour(cat, hex)} />
+                            </div>
+                          </>
+                        )}
+                      </span>
+                      <div style={{ display: "flex", gap: 6 }}>
+                        {cat.active ? (
+                          <>
+                            <button type="button" onClick={() => startEditGuestCategory(cat)}>Rename</button>
+                            <button type="button" className="tr-danger" onClick={() => deleteGuestCategory(cat)}>Delete</button>
+                          </>
+                        ) : (
+                          <button type="button" onClick={() => restoreGuestCategory(cat)}>Restore</button>
+                        )}
+                      </div>
+                    </>
+                  )}
+                </li>
+              ))}
+          </ul>
+
+          <div style={{ marginTop: 10 }}>
+            {addingGuestCategory ? (
+              <form onSubmit={submitNewGuestCategory} style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                <input
+                  autoFocus
+                  value={newGuestCategoryName}
+                  onChange={(e) => setNewGuestCategoryName(e.target.value)}
+                  placeholder="Category name"
+                  style={{ flex: 1, maxWidth: 280 }}
+                />
+                <ColourPicker value={newGuestCategoryColour} onChange={setNewGuestCategoryColour} />
+                <button type="submit" className="primary">Add</button>
+                <button type="button" onClick={() => setAddingGuestCategory(false)}>Cancel</button>
+              </form>
+            ) : (
+              <button type="button" className="primary" onClick={() => setAddingGuestCategory(true)}>
+                + Add Category
+              </button>
+            )}
+          </div>
+        </div>
         </div>
       </div>
 

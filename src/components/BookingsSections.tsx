@@ -75,7 +75,13 @@ export interface BookingsSection {
  * reflected in every other one immediately, since they're really the same
  * columns.
  */
-export default function BookingsSections({ sections }: { sections: BookingsSection[] }) {
+export default function BookingsSections({
+  sections,
+  guestCategories,
+}: {
+  sections: BookingsSection[];
+  guestCategories: { id: number; name: string; colour: string }[];
+}) {
   const router = useRouter();
   const [columns, setColumns] = useState<Column[]>(DEFAULT_COLUMNS);
   const [hiddenKeys, setHiddenKeys] = useState<Set<string>>(new Set());
@@ -175,8 +181,26 @@ export default function BookingsSections({ sections }: { sections: BookingsSecti
 
   return (
     <>
-      <div style={{ display: "flex", alignItems: "center", marginBottom: 12 }}>
+      <div style={{ display: "flex", alignItems: "center", marginBottom: 12, flexWrap: "wrap", rowGap: 8 }}>
         <h1 style={{ fontSize: 18, margin: 0 }}>{pageTitle}</h1>
+        {guestCategories.length > 0 && (
+          <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 6, marginLeft: 16 }}>
+            <span className="tr-muted" style={{ fontSize: 12 }}>Guest type:</span>
+            {guestCategories.map((c) => (
+              <span
+                key={c.id}
+                className="tr-grid-booking-pill"
+                style={{
+                  position: "static",
+                  ["--tr-booking-color" as string]: c.colour,
+                  ["--tr-booking-fill" as string]: `color-mix(in srgb, ${c.colour} 24%, white)`,
+                }}
+              >
+                {c.name}
+              </span>
+            ))}
+          </div>
+        )}
         <span style={{ flex: 1 }} />
         <div style={{ marginRight: 8 }}>
           <AlertsButton onChanged={() => router.refresh()} />

@@ -31,9 +31,8 @@ export async function GET(req: NextRequest) {
   // "single" or "double" — see the Bed Type dropdown on the booking forms.
   // Omitted entirely = no type filter (used by callers that don't offer the
   // dropdown, e.g. the Shares Bed With partner-bed lookup).
-  const bedTypeFilter = req.nextUrl.searchParams.get("bedType") === "single" || req.nextUrl.searchParams.get("bedType") === "double"
-    ? (req.nextUrl.searchParams.get("bedType") as "single" | "double")
-    : null;
+  const bedTypeParam = req.nextUrl.searchParams.get("bedType");
+  const bedTypeFilter = bedTypeParam === "single" || bedTypeParam === "double" ? bedTypeParam : null;
 
   if (!isIsoDate(arrivalDate) || !isIsoDate(departureDate) || departureDate <= arrivalDate) {
     return NextResponse.json({ error: "Valid arrival/departure dates are required" }, { status: 400 });

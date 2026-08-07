@@ -1,6 +1,6 @@
 import { db } from "@/db";
 import { desc } from "drizzle-orm";
-import { beds, bedLocations, bedSoloPeriods, bookings, joinedBeds, rooms } from "@/db/schema";
+import { beds, bedLocations, bedSoloPeriods, bookings, guestCategories, joinedBeds, rooms } from "@/db/schema";
 import { formatDateUk, nightsBetween } from "@/lib/dates";
 import { addDays } from "@/lib/occupancy";
 import { type BookingRow } from "@/components/BookingsTable";
@@ -8,25 +8,20 @@ import BookingsSections from "@/components/BookingsSections";
 
 export const dynamic = "force-dynamic";
 
-const GUEST_TYPE_LABELS: Record<string, string> = {
-  resident: "Resident",
-  ashrami: "Ashrami",
-  guest: "Guest",
-  friends_family: "Friends & Family",
-};
-
 export default async function BookingsPage() {
-  const [rows, locationRows, roomRows, bedRows, joinRows, soloRows] = await Promise.all([
+  const [rows, locationRows, roomRows, bedRows, joinRows, soloRows, guestCategoryRows] = await Promise.all([
     db.select().from(bookings).orderBy(desc(bookings.arrivalDate)).limit(200),
     db.select().from(bedLocations),
     db.select().from(rooms),
     db.select().from(beds),
     db.select().from(joinedBeds),
     db.select().from(bedSoloPeriods),
+    db.select().from(guestCategories),
   ]);
   const guestNameById = new Map(rows.map((b) => [b.id, b.guestName]));
   const roomNameById = new Map(roomRows.map((r) => [r.id, r.name]));
   const bedById = new Map(bedRows.map((b) => [b.id, b]));
+  const guestCategoryById = new Map(guestCategoryRows.map((c) => [c.id, c]));
 
   // "Shares with" needs to surface the WHOLE group a booking is tied to,
   // not just its own single linkedBookingId/sharesBedWithBookingId pointer
@@ -104,11 +99,24 @@ export default async function BookingsPage() {
     return solo ? "Solo Double" : "1.5 bed";
   }
 
+  // "First (Preferred) Last" when a preferred name is set and actually
+  // differs from the first name — e.g. "Frank (Frabbie) Jones" — otherwise
+  // just "First Last". Only affects the Bookings table's own Guest column;
+  // b.guestName itself (plain "First Last") is untouched everywhere else
+  // (grid pill tooltips, "Shares with" text, exports, …).
+  function displayGuestName(b: (typeof rows)[number]): string {
+    const preferred = b.preferredName?.trim();
+    if (preferred && preferred.toLowerCase() !== b.firstName.trim().toLowerCase()) {
+      return `${b.firstName} (${preferred}) ${b.lastName}`.trim();
+    }
+    return `${b.firstName} ${b.lastName}`.trim();
+  }
+
   function toRow(b: (typeof rows)[number]): BookingRow {
     const tags = Array.isArray(b.dietariesTags) ? (b.dietariesTags as string[]) : [];
     return {
       id: b.id,
-      guestName: b.guestName,
+      guestName: displayGuestName(b),
       roomName: roomNameForBooking(b.bedId, b.arrivalDate),
       arrivalDate: formatDateUk(b.arrivalDate),
       departureDate: formatDateUk(b.departureDate),
@@ -124,7 +132,8 @@ export default async function BookingsPage() {
           .join(", ");
       })(),
       bedType: bedTypeForBooking(b.bedId, b.arrivalDate),
-      guestType: GUEST_TYPE_LABELS[b.guestType] ?? b.guestType,
+      guestType: b.guestCategoryId ? guestCategoryById.get(b.guestCategoryId)?.name ?? "—" : "—",
+      guestCategoryColour: b.guestCategoryId ? guestCategoryById.get(b.guestCategoryId)?.colour ?? null : null,
       dietary: tags.length > 0 ? tags.join(", ") : "—",
     };
   }
@@ -148,6 +157,7 @@ export default async function BookingsPage() {
             { title: "Arriving in the next 7 days", rows: upcomingRows, emptyMessage: "No arrivals in the next 7 days." },
             { title: "Other bookings", rows: laterRows },
           ]}
+          guestCategories={guestCategoryRows.filter((c) => c.active).map((c) => ({ id: c.id, name: c.name, colour: c.colour }))}
         />
       </div>
     </div>

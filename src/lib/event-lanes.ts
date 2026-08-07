@@ -28,6 +28,8 @@ export interface GridEvent {
   /** Inclusive — see the note above. */
   endDate: ISODate;
   notes: string | null;
+  /** Staff-picked colour, or null to fall back to the old hash-based auto-pick — see eventColour in room-colours.ts. */
+  colour: string | null;
 }
 
 export interface EventBand {
@@ -57,6 +59,7 @@ export async function eventsInRange(start: ISODate, end: ISODate): Promise<GridE
       startDate: events.startDate,
       endDate: events.endDate,
       notes: events.notes,
+      colour: events.colour,
     })
     .from(events)
     .where(and(lte(events.startDate, end), gte(events.endDate, start)))

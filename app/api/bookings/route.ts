@@ -9,8 +9,6 @@ import { logChange } from "@/lib/change-log";
 import { desc } from "drizzle-orm";
 import { formatDateUk } from "@/lib/dates";
 
-const GUEST_TYPES = ["resident", "ashrami", "guest", "friends_family"] as const;
-
 export const dynamic = "force-dynamic";
 
 export async function GET() {
@@ -36,7 +34,7 @@ export async function POST(req: NextRequest) {
   const linkedBookingId = body.linkedBookingId ? Number(body.linkedBookingId) : null;
   const bedId = body.bedId ? Number(body.bedId) : null;
   const dietariesTags = Array.isArray(body.dietariesTags) ? body.dietariesTags : null;
-  const guestType = GUEST_TYPES.includes(body.guestType) ? body.guestType : "guest";
+  const guestCategoryId = body.guestCategoryId ? Number(body.guestCategoryId) : null;
   // Auto-Join Fallback (see /api/beds/available's fallbackPairs): the client
   // picked a plain free Single because no double was available, and wants
   // it auto-joined with another free Single in the same room.
@@ -69,7 +67,7 @@ export async function POST(req: NextRequest) {
   const booking = await db.transaction(async (tx) => {
     const [row] = await tx
       .insert(bookings)
-      .values({ guestName, firstName, lastName, preferredName, notes, arrivalDate, departureDate, linkedBookingId, bedId, dietariesTags, guestType })
+      .values({ guestName, firstName, lastName, preferredName, notes, arrivalDate, departureDate, linkedBookingId, bedId, dietariesTags, guestCategoryId })
       .returning();
 
     if (bedId != null && partnerBedId != null) {

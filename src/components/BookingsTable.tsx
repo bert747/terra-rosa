@@ -14,6 +14,7 @@ export interface BookingRow {
   bedType: string;
   guestType: string;
   dietary: string;
+  guestCategoryColour: string | null;
 }
 
 export interface Column {
@@ -299,12 +300,38 @@ export default function BookingsTable({
         </thead>
         <tbody>
           {sortedRows.map((row) => (
-            <tr key={row.id} className="tr-row-link" onContextMenu={(e) => openRowMenu(e, row)}>
+            <tr
+              key={row.id}
+              className="tr-row-link"
+              onContextMenu={(e) => openRowMenu(e, row)}
+              // Same guest-category colour as the grid pill — the row's own
+              // background uses the identical 24%-mix-with-white formula as
+              // --tr-booking-fill (see GridCanvas.tsx's bookingColourVars),
+              // so a row and its booking's pill always read as the same
+              // colour. An uncategorised booking just gets no stripe/tint.
+              // The stripe itself is a CSS variable, not a raw inline
+              // box-shadow — see .tr-row-link's own comment in globals.css
+              // for why: an inline box-shadow would silently block the
+              // :hover ring from ever combining with it.
+              style={
+                row.guestCategoryColour
+                  ? ({
+                      ["--tr-row-stripe" as string]: row.guestCategoryColour,
+                      backgroundColor: `color-mix(in srgb, ${row.guestCategoryColour} 24%, white)`,
+                    } as React.CSSProperties)
+                  : undefined
+              }
+            >
               {visibleColumns.map((col) => (
                 <td
                   key={col.key}
                   data-tooltip={col.key === "dietary" ? row.dietary : undefined}
-                  style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+                  style={{
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                    fontWeight: col.key === "guestName" ? 600 : undefined,
+                  }}
                 >
                   <a className="tr-cell-link" href={`/bookings/${row.id}`}>
                     {row[col.key]}
