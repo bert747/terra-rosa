@@ -152,6 +152,45 @@ no `gcloud` CLI required. Everything from step 5 onward happens in a terminal
 on the VM itself, which the Console gives you a browser button for (no SSH
 client to install locally either).
 
+### Pre-deployment checklist
+
+Fill these in before starting (or as you go through the steps below), then
+delete this checklist once the values are in place on the VM's `.env`:
+
+- [ ] **Domain name** to point at the VM: `___________________________`
+- [ ] **DNS provider / where the A record is managed**: `___________________________`
+- [ ] **GCP project name**: `___________________________`
+- [ ] **Billing account** linked to the project: `___________________________`
+- [ ] **Region/zone** chosen (must be `us-central1`, `us-west1`, or
+      `us-east1` for the e2-micro free tier): `___________________________`
+- [ ] **Static external IP** reserved and attached to the VM (recommended —
+      see step 2, avoids DNS breaking on VM restart)
+- [ ] **SSH source IP restricted** on `default-allow-ssh` (step 3) — not left
+      open to `0.0.0.0/0`
+- [ ] **`SESSION_SECRET`** generated for production (`openssl rand -hex 32`)
+      — not the `.env.example` placeholder
+- [ ] **`POSTGRES_PASSWORD`** generated for production — not `devpass`
+- [ ] **`SEED_ADMIN_NAME`** set: `___________________________`
+- [ ] **`SEED_ADMIN_EMAIL`** set: `___________________________`
+- [ ] **`SEED_ADMIN_PASSWORD`** set to a real value for first boot (to be
+      changed after first login via `/change-password`)
+- [ ] **`DOMAIN`** in `.env` set to the real domain (not `localhost`)
+- [ ] **`.env` created on the VM only**, confirmed not committed to git
+- [ ] All migrations under `drizzle/*.sql` applied after first
+      `docker compose up` (currently through `0015_event_colour.sql` —
+      check for newer ones added since)
+- [ ] **HTTPS working** — confirmed `https://yourdomain.org` loads with a
+      valid Let's Encrypt cert (give Caddy a minute after first request)
+- [ ] **Admin login works** and admin password changed from the seed value
+- [ ] **Property Layout** set up (`/settings/layout`) — floors/rooms/beds,
+      since there's no seed data for these
+- [ ] **Backups configured** — cron job for `pg_dump` + upload to a Cloud
+      Storage bucket with retention
+- [ ] **Uptime check** configured (Console → Monitoring → Uptime checks)
+      against `https://yourdomain.org/api/health`
+- [ ] **Budget alert** configured (Console → Billing → Budgets & alerts,
+      e.g. $5) as a safety net against unexpected charges
+
 ### 1. Project and billing
 
 1. Go to [console.cloud.google.com](https://console.cloud.google.com) and,

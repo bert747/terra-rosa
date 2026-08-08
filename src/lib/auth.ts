@@ -1,4 +1,5 @@
 import { cookies } from "next/headers";
+import type { NextRequest } from "next/server";
 import { createHmac, timingSafeEqual } from "crypto";
 import bcrypt from "bcryptjs";
 import { eq } from "drizzle-orm";
@@ -23,6 +24,18 @@ import { users, type User } from "@/db/schema";
 
 const COOKIE_NAME = "tr_session";
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+
+/**
+ * Redirect target behind the reverse proxy: `req.url` in a self-hosted
+ * `next start` server resolves to the app's own bind address (localhost:PORT),
+ * not the client-facing domain, even when the Host header is correct. Caddy
+ * sets X-Forwarded-Host/-Proto, so build the absolute URL from those.
+ */
+export function redirectUrl(path: string, req: NextRequest): URL {
+  const host = req.headers.get("x-forwarded-host") ?? req.headers.get("host") ?? req.nextUrl.host;
+  const proto = req.headers.get("x-forwarded-proto") ?? req.nextUrl.protocol.replace(":", "");
+  return new URL(path, `${proto}://${host}`);
+}
 
 function getSecret(): string {
   const secret = process.env.SESSION_SECRET;

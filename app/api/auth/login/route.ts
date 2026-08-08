@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createSession, verifyPassword } from "@/lib/auth";
+import { createSession, redirectUrl, verifyPassword } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -10,11 +10,11 @@ export async function POST(req: NextRequest) {
 
   const user = await verifyPassword(email, password);
   if (!user) {
-    const url = new URL("/login?error=1", req.url);
+    const url = redirectUrl("/login?error=1", req);
     return NextResponse.redirect(url, { status: 303 });
   }
 
   await createSession(user.id);
-  const url = new URL(user.mustChangePassword ? "/change-password" : "/grid", req.url);
+  const url = redirectUrl(user.mustChangePassword ? "/change-password" : "/grid", req);
   return NextResponse.redirect(url, { status: 303 });
 }
