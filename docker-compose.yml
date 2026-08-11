@@ -20,6 +20,7 @@ services:
 
   app:
     build: .
+    container_name: terra-rosa-app
     restart: unless-stopped
     depends_on:
       db:
@@ -32,14 +33,21 @@ services:
       SEED_ADMIN_EMAIL: ${SEED_ADMIN_EMAIL}
       SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD}
       NODE_ENV: production
-    ports:
-      - "3060:3000"
+    expose:
+      - "3060"
+    networks:
+      - default
+      - proxynet
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:3060/api/health"]
       interval: 15s
       timeout: 5s
       retries: 5
       start_period: 30s
+
+networks:
+  proxynet:
+    external: true
 
 volumes:
   db_data:
