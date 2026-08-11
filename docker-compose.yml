@@ -33,8 +33,8 @@ services:
       SEED_ADMIN_EMAIL: ${SEED_ADMIN_EMAIL}
       SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD}
       NODE_ENV: production
-    expose:
-      - "3060"
+    ports:
+      - "3060:3060"
     networks:
       - default
       - proxynet
