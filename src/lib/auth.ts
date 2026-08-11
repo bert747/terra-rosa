@@ -74,14 +74,15 @@ function verifyToken(token: string): { userId: number; expiresAt: number } | nul
   return { userId, expiresAt };
 }
 
-export async function createSession(userId: number) {
+export async function createSession(userId: number, req: NextRequest) {
   const expiresAt = Date.now() + SESSION_TTL_MS;
   const token = makeToken(userId, expiresAt);
+  const proto = req.headers.get("x-forwarded-proto") ?? req.nextUrl.protocol.replace(":", "");
   const cookieStore = await cookies();
   cookieStore.set(COOKIE_NAME, token, {
     httpOnly: true,
     sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
+    secure: proto === "https",
     path: "/",
     expires: new Date(expiresAt),
   });

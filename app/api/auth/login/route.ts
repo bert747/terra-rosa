@@ -14,7 +14,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.redirect(url, { status: 303 });
   }
 
-  await createSession(user.id);
+  await createSession(user.id, req);
   const url = redirectUrl(user.mustChangePassword ? "/change-password" : "/grid", req);
   return NextResponse.redirect(url, { status: 303 });
 }
