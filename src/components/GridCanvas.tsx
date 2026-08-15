@@ -884,10 +884,22 @@ export default function GridCanvas({ initialData, today }: { initialData: GridDa
     function onWheel(e: WheelEvent) {
       e.preventDefault();
       const current = pendingScrollRef.current ?? { left: vp!.scrollLeft, top: vp!.scrollTop };
-      pendingScrollRef.current = {
-        left: current.left + e.deltaX * WHEEL_SCROLL_FACTOR,
-        top: current.top + e.deltaY * WHEEL_SCROLL_FACTOR,
-      };
+      if (e.shiftKey) {
+        // Shift+scroll pans left/right only, ignoring vertical entirely —
+        // a plain mouse wheel only ever reports motion on deltaY (even held
+        // with Shift, since we're not relying on the browser's own native
+        // axis-swap — that only happens for the UNintercepted scroll we're
+        // preventDefault-ing away here), so that's what actually drives the
+        // pan; a trackpad's own real deltaX (e.g. a diagonal swipe) is
+        // honoured too if present, in case both arrive on the same event.
+        const horizontalDelta = e.deltaX !== 0 ? e.deltaX : e.deltaY;
+        pendingScrollRef.current = { left: current.left + horizontalDelta * WHEEL_SCROLL_FACTOR, top: current.top };
+      } else {
+        // Without Shift, scrolling is vertical-only — a trackpad's incidental
+        // sideways drift on an otherwise-vertical swipe no longer nudges the
+        // grid horizontally too.
+        pendingScrollRef.current = { left: current.left, top: current.top + e.deltaY * WHEEL_SCROLL_FACTOR };
+      }
       if (panRafRef.current == null) panRafRef.current = requestAnimationFrame(flushPanScroll);
     }
     vp.addEventListener("wheel", onWheel, { passive: false });
