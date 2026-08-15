@@ -90,6 +90,8 @@ export default function BookingsSections({
   const [columnsMenuOpen, setColumnsMenuOpen] = useState(false);
   const [confirmState, setConfirmState] = useState<ConfirmModalState | null>(null);
   const [search, setSearch] = useState("");
+  const [searchResults, setSearchResults] = useState<BookingRow[]>([]);
+  const [searchLoading, setSearchLoading] = useState(false);
 
   // page.tsx (the server component that computes `sections`) re-fetches on
   // navigation but not automatically after a client-side mutation like this
@@ -113,6 +115,40 @@ export default function BookingsSections({
     setColumnWidths(loadColumnWidths());
     setSplitByArrival(loadSplitByArrival());
   }, []);
+
+  // Debounced search against /api/bookings/search — a real server query
+  // (not a client-side filter) so it can reach bookings outside the page's
+  // own most-recent-200, i.e. actually search the whole history rather than
+  // whatever happened to already be loaded. `active` + AbortController both
+  // guard against a slow earlier request clobbering a newer, faster one.
+  useEffect(() => {
+    const query = search.trim();
+    if (!query) {
+      setSearchResults([]);
+      setSearchLoading(false);
+      return;
+    }
+    let active = true;
+    const controller = new AbortController();
+    setSearchLoading(true);
+    const timer = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/bookings/search?q=${encodeURIComponent(query)}`, { signal: controller.signal });
+        if (!active) return;
+        const rows: BookingRow[] = res.ok ? await res.json() : [];
+        setSearchResults(rows);
+      } catch {
+        if (active) setSearchResults([]);
+      } finally {
+        if (active) setSearchLoading(false);
+      }
+    }, 300);
+    return () => {
+      active = false;
+      controller.abort();
+      clearTimeout(timer);
+    };
+  }, [search]);
 
   function persistColumns(next: Column[]) {
     setColumns(next);
@@ -159,30 +195,23 @@ export default function BookingsSections({
     }
   }
 
-  // Matches on first name, surname, or preferred name — not the combined
-  // "First (Preferred) Last" guestName column text, so e.g. searching
-  // "Frabbie" still finds "Frank (Frabbie) Jones" even though "Frabbie"
-  // never appears as its own word boundary in that combined string (it
-  // does, but matching the raw fields directly is simpler and doesn't rely
-  // on displayGuestName's exact formatting staying in sync with this).
-  const query = search.trim().toLowerCase();
-  function matchesSearch(row: BookingRow): boolean {
-    if (!query) return true;
-    return (
-      row.firstName.toLowerCase().includes(query) ||
-      row.lastName.toLowerCase().includes(query) ||
-      (row.preferredName?.toLowerCase().includes(query) ?? false)
-    );
-  }
-  const searchedSections: BookingsSection[] = sections.map((s) => ({ ...s, rows: s.rows.filter(matchesSearch) }));
-
   // With the toggle off, every section's rows just flow into one combined
   // list — still the same underlying rows/order (arriving-soonest first,
   // then the rest), just without the "arriving this week vs. everyone
   // else" heading splitting them up.
   const displaySections: BookingsSection[] = splitByArrival
-    ? searchedSections
-    : [{ title: "All bookings", rows: searchedSections.flatMap((s) => s.rows) }];
+    ? sections
+    : [{ title: "All bookings", rows: sections.flatMap((s) => s.rows) }];
+
+  // Searching hits a dedicated endpoint (see the effect below) rather than
+  // filtering `sections` client-side, since `sections` only ever holds the
+  // page's own most-recent-200 bookings — a plain client filter could never
+  // find anything older than that. While a search is active, it fully
+  // replaces the normal arrival-week grouping with one flat results list
+  // (mixing past/future/whatever matched doesn't fit neatly into "arriving
+  // this week" vs "other bookings" anyway).
+  const query = search.trim();
+  const searching = query.length > 0;
 
   // The page's own <h1> and the first section's heading used to both say
   // essentially "Bookings" — folded into one line here instead: "Bookings
@@ -193,9 +222,11 @@ export default function BookingsSections({
   // bookings") still gets its own heading below, same as before — only the
   // first one merges into the page title.
   const [firstSection, ...restSections] = displaySections;
-  const pageTitle = splitByArrival
-    ? `Bookings ${firstSection.title.charAt(0).toLowerCase()}${firstSection.title.slice(1)} (${firstSection.rows.length})`
-    : "Bookings";
+  const pageTitle = searching
+    ? "Bookings"
+    : splitByArrival
+      ? `Bookings ${firstSection.title.charAt(0).toLowerCase()}${firstSection.title.slice(1)} (${firstSection.rows.length})`
+      : "Bookings";
 
   return (
     <>
@@ -219,15 +250,15 @@ export default function BookingsSections({
             ))}
           </div>
         )}
+        <span style={{ flex: 1 }} />
         <input
           type="search"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           placeholder="Search first name, surname or preferred name…"
           aria-label="Search bookings"
-          style={{ marginLeft: 16, minWidth: 260 }}
+          style={{ minWidth: 240 }}
         />
-        <span style={{ flex: 1 }} />
         <div style={{ marginRight: 8 }}>
           <AlertsButton onChanged={() => router.refresh()} />
         </div>
@@ -282,31 +313,16 @@ export default function BookingsSections({
         </div>
       </div>
 
-      {firstSection.rows.length > 0 ? (
-        <BookingsTable
-          rows={firstSection.rows}
-          columns={columns}
-          hiddenKeys={hiddenKeys}
-          columnWidths={{ ...DEFAULT_COLUMN_WIDTHS, ...columnWidths }}
-          onReorderColumns={persistColumns}
-          onResizeColumn={resizeColumn}
-          onToggleVisible={toggleVisible}
-          onDeleteRow={deleteRow}
-        />
-      ) : (
-        <p className="tr-muted" style={{ marginBottom: 16 }}>
-          {query ? `No bookings match "${search.trim()}".` : firstSection.emptyMessage ?? "No bookings."}
-        </p>
-      )}
-
-      {restSections.map((section) => (
-        <div key={section.title}>
-          <h2 className="tr-section-title" style={{ marginTop: 24, marginBottom: 8 }}>
-            {section.title} ({section.rows.length})
+      {searching ? (
+        <div>
+          <h2 className="tr-section-title" style={{ marginBottom: 8 }}>
+            Search results {searchLoading ? "" : `(${searchResults.length})`}
           </h2>
-          {section.rows.length > 0 ? (
+          {searchLoading ? (
+            <p className="tr-muted" style={{ marginBottom: 16 }}>Searching…</p>
+          ) : searchResults.length > 0 ? (
             <BookingsTable
-              rows={section.rows}
+              rows={searchResults}
               columns={columns}
               hiddenKeys={hiddenKeys}
               columnWidths={{ ...DEFAULT_COLUMN_WIDTHS, ...columnWidths }}
@@ -316,12 +332,49 @@ export default function BookingsSections({
               onDeleteRow={deleteRow}
             />
           ) : (
-            <p className="tr-muted" style={{ marginBottom: 16 }}>
-              {query ? `No bookings match "${search.trim()}".` : section.emptyMessage ?? "No bookings."}
-            </p>
+            <p className="tr-muted" style={{ marginBottom: 16 }}>No bookings match &quot;{query}&quot;.</p>
           )}
         </div>
-      ))}
+      ) : (
+        <>
+          {firstSection.rows.length > 0 ? (
+            <BookingsTable
+              rows={firstSection.rows}
+              columns={columns}
+              hiddenKeys={hiddenKeys}
+              columnWidths={{ ...DEFAULT_COLUMN_WIDTHS, ...columnWidths }}
+              onReorderColumns={persistColumns}
+              onResizeColumn={resizeColumn}
+              onToggleVisible={toggleVisible}
+              onDeleteRow={deleteRow}
+            />
+          ) : (
+            <p className="tr-muted" style={{ marginBottom: 16 }}>{firstSection.emptyMessage ?? "No bookings."}</p>
+          )}
+
+          {restSections.map((section) => (
+            <div key={section.title}>
+              <h2 className="tr-section-title" style={{ marginTop: 24, marginBottom: 8 }}>
+                {section.title} ({section.rows.length})
+              </h2>
+              {section.rows.length > 0 ? (
+                <BookingsTable
+                  rows={section.rows}
+                  columns={columns}
+                  hiddenKeys={hiddenKeys}
+                  columnWidths={{ ...DEFAULT_COLUMN_WIDTHS, ...columnWidths }}
+                  onReorderColumns={persistColumns}
+                  onResizeColumn={resizeColumn}
+                  onToggleVisible={toggleVisible}
+                  onDeleteRow={deleteRow}
+                />
+              ) : (
+                <p className="tr-muted" style={{ marginBottom: 16 }}>{section.emptyMessage ?? "No bookings."}</p>
+              )}
+            </div>
+          ))}
+        </>
+      )}
       <ConfirmModal state={confirmState} onClose={() => setConfirmState(null)} />
     </>
   );

@@ -38,6 +38,14 @@
      mean something specific and shouldn't drift with a booking re-theme. */
   --tr-booking-color: #8a7360;
   --tr-booking-fill: color-mix(in srgb, var(--tr-booking-color) 24%, white);
+  /* Pill border — a plain var(--tr-booking-color) border reads fine for
+     every saturated colour, but goes invisible (or near enough) against a
+     white/very pale guest-category colour sitting on this app's own light
+     surface. Darkening 18% toward black is barely perceptible on a strong
+     colour but turns white into a visible light grey — see bookingColourVars
+     in GridCanvas.tsx (and guestCategoryColourVars in the Layout settings
+     page) for where this gets recomputed per booking/category colour. */
+  --tr-booking-border: color-mix(in srgb, var(--tr-booking-color) 82%, black 18%);
   /* Dashed bed-divider colour (coupled/native-double seam), read at 50%
      opacity by .tr-grid-divider-dashed so it stays soft. Solid dividers use
      --tr-border directly instead (see .tr-grid-divider-solid) — they need
@@ -1207,7 +1215,7 @@ button:hover {
      span regardless, so the weekend tint is simply left off bookings
      entirely rather than chasing per-fragment position math. */
   background-color: var(--tr-booking-fill);
-  border: 1px solid var(--tr-booking-color);
+  border: 1px solid var(--tr-booking-border);
   border-radius: 12px;
   color: var(--tr-text);
   text-decoration: none;
@@ -1405,7 +1413,7 @@ button:hover {
 @keyframes tr-pill-flash {
   0%, 100% {
     box-shadow: none;
-    border-color: var(--tr-booking-color);
+    border-color: var(--tr-booking-border);
   }
   50% {
     box-shadow: 0 0 0 3px var(--tr-accent, #c2185b);

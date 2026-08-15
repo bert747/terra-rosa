@@ -29,6 +29,12 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 
   if (updates.categoryId !== undefined || updates.excludeFromSuggestions !== undefined) {
     await logChange({ category: "layout", action: "Updated room suggestions setting", summary: `Updated "${room.name}"'s move-suggestion settings` });
+  } else if (updates.floorId !== undefined) {
+    // A cross-floor drag (see the Layout page's handleRoomDrop) sends both
+    // floorId and rank on the ONE room that actually moved floors — worth
+    // its own log entry, unlike a same-floor reorder's plain rank-only PATCH
+    // below, which would spam the log once per row that shifted position.
+    await logChange({ category: "layout", action: "Moved room", summary: `Moved room "${room.name}" to a different floor` });
   } else if (updates.rank === undefined) {
     // Drag-to-reorder (see the Layout page) sends just `rank`, once per row
     // landed in a new position — logging each of those would spam the

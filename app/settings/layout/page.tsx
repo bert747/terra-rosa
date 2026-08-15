@@ -107,8 +107,6 @@ export default function PropertyLayoutPage() {
   const [floorEditValue, setFloorEditValue] = useState("");
   const [editingRoomId, setEditingRoomId] = useState<number | null>(null);
   const [roomEditValue, setRoomEditValue] = useState("");
-  const [movingRoomId, setMovingRoomId] = useState<number | null>(null);
-  const [moveTargetFloorId, setMoveTargetFloorId] = useState("");
   const [confirmState, setConfirmState] = useState<ConfirmModalState | null>(null);
   const [addingFloor, setAddingFloor] = useState(false);
   const [newFloorName, setNewFloorName] = useState("");
@@ -318,27 +316,6 @@ export default function PropertyLayoutPage() {
     });
   }
 
-  function startMoveRoom(room: Room) {
-    setMovingRoomId(room.id);
-    setMoveTargetFloorId("");
-    setEditingRoomId(null);
-  }
-
-  async function submitMoveRoom(e: React.FormEvent, room: Room) {
-    e.preventDefault();
-    const floorId = Number(moveTargetFloorId);
-    if (!floorId) return;
-    const ok = await withError(() =>
-      fetch(`/api/rooms/${room.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ floorId }),
-      })
-    );
-    setMovingRoomId(null);
-    if (ok) load();
-  }
-
   async function setRoomCategory(room: Room, categoryId: number | null) {
     const ok = await withError(() =>
       fetch(`/api/rooms/${room.id}`, {
@@ -361,39 +338,55 @@ export default function PropertyLayoutPage() {
     if (ok) load();
   }
 
-  // Drag-to-reorder rooms within a single floor — same one-axis HTML5 drag
-  // pattern as the Room Categories list below (see handleCategoryDrop's own
-  // comment). Only ever reorders rooms belonging to `floorId`; a room can't
-  // be dragged onto a different floor's list (use the existing "Move"
-  // control for that), so ranks are recomputed as a clean 0..n-1 sequence
-  // scoped to that one floor only, leaving every other floor's ranks alone.
+  // Drag-and-drop rooms — reorder within a floor, OR drag across onto a
+  // different floor entirely (dropped on another room = "insert before that
+  // one"; dropped on a floor's own room list below its last room, including
+  // an empty floor = "append to the end of this floor"). Always available
+  // (not gated behind the Edit toggle — Bert wanted this to just work from
+  // the plain view), same one-axis HTML5 drag pattern as the Room
+  // Categories list below (see handleCategoryDrop's own comment).
   const [draggingRoomId, setDraggingRoomId] = useState<number | null>(null);
   const [dragOverRoomId, setDragOverRoomId] = useState<number | null>(null);
+  const [dragOverFloorId, setDragOverFloorId] = useState<number | null>(null);
 
-  async function handleRoomDrop(floorId: number, targetId: number) {
+  // `targetRoomId` null means "drop at the end of this floor's list" (either
+  // a genuinely empty floor, or dropping below the last real room).
+  async function handleRoomDrop(targetFloorId: number, targetRoomId: number | null) {
     setDragOverRoomId(null);
-    if (!draggingRoomId || draggingRoomId === targetId) return;
-    const ordered = sortRooms(rooms.filter((r) => r.floorId === floorId));
-    const fromIndex = ordered.findIndex((r) => r.id === draggingRoomId);
-    const toIndex = ordered.findIndex((r) => r.id === targetId);
-    if (fromIndex === -1 || toIndex === -1) return;
-    const [moved] = ordered.splice(fromIndex, 1);
-    ordered.splice(toIndex, 0, moved);
+    setDragOverFloorId(null);
+    const draggedRoom = rooms.find((r) => r.id === draggingRoomId);
     setDraggingRoomId(null);
-    const rankById = new Map(ordered.map((r, i) => [r.id, i]));
-    // Optimistic local reorder so the list doesn't visually snap back while
-    // the PATCH calls are in flight.
-    setRooms((prev) => prev.map((r) => (rankById.has(r.id) ? { ...r, rank: rankById.get(r.id)! } : r)));
+    if (!draggedRoom || draggedRoom.id === targetRoomId) return;
+
+    // The target floor's own room order, dragged room excluded (whether or
+    // not it started out on this floor), then re-inserted at the drop spot.
+    const targetOrdered = sortRooms(rooms.filter((r) => r.floorId === targetFloorId && r.id !== draggedRoom.id));
+    const insertIndex = targetRoomId == null ? targetOrdered.length : targetOrdered.findIndex((r) => r.id === targetRoomId);
+    targetOrdered.splice(insertIndex === -1 ? targetOrdered.length : insertIndex, 0, { ...draggedRoom, floorId: targetFloorId });
+
+    const crossFloor = draggedRoom.floorId !== targetFloorId;
+    const rankById = new Map(targetOrdered.map((r, i) => [r.id, i]));
+    // Optimistic local reorder (and, on a cross-floor drop, re-parent) so the
+    // list doesn't visually snap back while the PATCH calls are in flight.
+    setRooms((prev) =>
+      prev.map((r) => {
+        if (!rankById.has(r.id)) return r;
+        const rank = rankById.get(r.id)!;
+        return r.id === draggedRoom.id && crossFloor ? { ...r, rank, floorId: targetFloorId } : { ...r, rank };
+      })
+    );
     await Promise.all(
-      ordered.map((r, i) =>
-        r.rank === i
-          ? Promise.resolve()
-          : fetch(`/api/rooms/${r.id}`, {
-              method: "PATCH",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ rank: i }),
-            })
-      )
+      targetOrdered.map((r, i) => {
+        const body: { rank?: number; floorId?: number } = {};
+        if (r.rank !== i) body.rank = i;
+        if (r.id === draggedRoom.id && crossFloor) body.floorId = targetFloorId;
+        if (Object.keys(body).length === 0) return Promise.resolve();
+        return fetch(`/api/rooms/${r.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+      })
     );
     load();
   }
@@ -509,15 +502,16 @@ export default function PropertyLayoutPage() {
   const [editingGuestCategoryColourId, setEditingGuestCategoryColourId] = useState<number | null>(null);
 
   // Same colour-var pattern as GridCanvas.tsx's bookingColourVars — sets
-  // BOTH --tr-booking-color and --tr-booking-fill directly (rather than
-  // relying on --tr-booking-fill's own color-mix() to pick up a nested
-  // override), since browsers don't re-resolve that nested var() against a
-  // closer override on the same element. See that function's own longer
-  // comment for the full story.
+  // --tr-booking-color, --tr-booking-fill AND --tr-booking-border directly
+  // (rather than relying on the latter two's own color-mix() to pick up a
+  // nested override), since browsers don't re-resolve that nested var()
+  // against a closer override on the same element. See that function's own
+  // longer comment for the full story.
   function guestCategoryColourVars(colour: string): React.CSSProperties {
     return {
       ["--tr-booking-color" as string]: colour,
       ["--tr-booking-fill" as string]: `color-mix(in srgb, ${colour} 24%, white)`,
+      ["--tr-booking-border" as string]: `color-mix(in srgb, ${colour} 82%, black 18%)`,
     } as React.CSSProperties;
   }
 
@@ -815,7 +809,31 @@ export default function PropertyLayoutPage() {
                   </div>
 
                   {!collapsed && (
-                    <ul style={{ listStyle: "none", margin: "8px 0 0", padding: "0 0 0 30px" }}>
+                    <ul
+                      // Drop zone for "append to the end of THIS floor" —
+                      // covers both a genuinely empty floor and dropping
+                      // below the last real room. Each room <li> below stops
+                      // its own onDrop from bubbling here (see its handler),
+                      // so a drop directly on a room only ever triggers that
+                      // room's own "insert before me" behaviour, never both.
+                      onDragOver={(e) => {
+                        if (!draggingRoomId) return;
+                        e.preventDefault();
+                        if (dragOverFloorId !== floor.id) setDragOverFloorId(floor.id);
+                      }}
+                      onDragLeave={() => setDragOverFloorId((id) => (id === floor.id ? null : id))}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        handleRoomDrop(floor.id, null);
+                      }}
+                      style={{
+                        listStyle: "none",
+                        margin: "8px 0 0",
+                        padding: "0 0 0 30px",
+                        background: dragOverFloorId === floor.id ? "var(--tr-accent-soft)" : undefined,
+                        minHeight: floorRooms.length === 0 ? 28 : undefined,
+                      }}
+                    >
                       {editMode && (
                         addingRoomFloorId === floor.id ? (
                           <li style={{ paddingBottom: 8 }}>
@@ -839,28 +857,30 @@ export default function PropertyLayoutPage() {
                       )}
 
                       {floorRooms.length === 0 && (
-                        <li className="tr-muted" style={{ fontSize: 13 }}>No rooms on this floor yet.</li>
+                        <li className="tr-muted" style={{ fontSize: 13 }}>No rooms on this floor yet — drag one here, or add one.</li>
                       )}
 
                       {floorRooms.map((room) => (
                         <li
                           key={room.id}
-                          draggable={editMode && editingRoomId !== room.id && movingRoomId !== room.id}
+                          draggable={editingRoomId !== room.id}
                           onDragStart={() => setDraggingRoomId(room.id)}
                           onDragOver={(e) => {
-                            if (!editMode) return;
+                            if (!draggingRoomId) return;
                             e.preventDefault();
+                            e.stopPropagation();
                             if (dragOverRoomId !== room.id) setDragOverRoomId(room.id);
                           }}
                           onDragLeave={() => setDragOverRoomId((id) => (id === room.id ? null : id))}
                           onDrop={(e) => {
-                            if (!editMode) return;
                             e.preventDefault();
+                            e.stopPropagation();
                             handleRoomDrop(floor.id, room.id);
                           }}
                           onDragEnd={() => {
                             setDraggingRoomId(null);
                             setDragOverRoomId(null);
+                            setDragOverFloorId(null);
                           }}
                           style={{
                             borderTop: "1px solid var(--tr-border)",
@@ -870,7 +890,7 @@ export default function PropertyLayoutPage() {
                           }}
                         >
                         <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                          {editMode && editingRoomId !== room.id && movingRoomId !== room.id && (
+                          {editingRoomId !== room.id && (
                             <span aria-hidden="true" className="tr-muted" style={{ fontSize: 12, letterSpacing: "-1px", cursor: "grab" }}>⠿</span>
                           )}
                           {editingRoomId === room.id ? (
@@ -883,24 +903,6 @@ export default function PropertyLayoutPage() {
                               />
                               <button type="submit" className="primary">Save</button>
                               <button type="button" onClick={() => setEditingRoomId(null)}>Cancel</button>
-                            </form>
-                          ) : movingRoomId === room.id ? (
-                            <form onSubmit={(e) => submitMoveRoom(e, room)} style={{ display: "flex", gap: 6, flex: 1 }}>
-                              <select
-                                autoFocus
-                                value={moveTargetFloorId}
-                                onChange={(e) => setMoveTargetFloorId(e.target.value)}
-                                style={{ flex: 1, maxWidth: 220 }}
-                              >
-                                <option value="">— move to which floor? —</option>
-                                {floors
-                                  .filter((f) => f.name !== DORM_STORAGE_FLOOR_NAME && f.id !== room.floorId)
-                                  .map((f) => (
-                                    <option key={f.id} value={f.id}>{f.name}</option>
-                                  ))}
-                              </select>
-                              <button type="submit" className="primary" disabled={!moveTargetFloorId}>Move</button>
-                              <button type="button" onClick={() => setMovingRoomId(null)}>Cancel</button>
                             </form>
                           ) : (
                             <span style={{ flex: 1 }}>
@@ -918,10 +920,9 @@ export default function PropertyLayoutPage() {
                             </span>
                           )}
 
-                          {editMode && editingRoomId !== room.id && movingRoomId !== room.id && (
+                          {editMode && editingRoomId !== room.id && (
                             <div style={{ display: "flex", gap: 6 }}>
                               <button type="button" onClick={() => startEditRoom(room)}>Rename</button>
-                              <button type="button" onClick={() => startMoveRoom(room)}>Move</button>
                               <button type="button" className="tr-danger" onClick={() => deleteRoom(room)}>Delete</button>
                             </div>
                           )}
@@ -929,8 +930,8 @@ export default function PropertyLayoutPage() {
 
                         {/* Move/fix-suggestion settings — see room_categories' own schema
                             comment for what these actually control. Only shown in edit
-                            mode, same as rename/move/delete, to keep the read view plain. */}
-                        {editMode && editingRoomId !== room.id && movingRoomId !== room.id && (
+                            mode, same as rename/delete, to keep the read view plain. */}
+                        {editMode && editingRoomId !== room.id && (
                           <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 6, paddingLeft: 2, flexWrap: "wrap" }}>
                             <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 12 }}>
                               <span className="tr-muted">Category:</span>

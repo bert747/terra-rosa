@@ -115,20 +115,22 @@ function saveGridViewState(state: GridViewState) {
 
 /**
  * Inline style overriding a booking pill's colour to its guest category's
- * own colour. Sets BOTH --tr-booking-color and --tr-booking-fill rather
- * than just the former — --tr-booking-fill is declared once, in globals.css,
- * as `color-mix(in srgb, var(--tr-booking-color) 24%, white)`; browsers
- * resolve that nested var() against whatever --tr-booking-color was AT THE
- * POINT --tr-booking-fill's OWN inherited value was last computed, not
- * against a closer override on the same element — so overriding only the
- * color left the fill silently stuck on the default. Computing the mix here
- * in JS and setting both custom properties directly sidesteps that.
+ * own colour. Sets --tr-booking-color, --tr-booking-fill AND
+ * --tr-booking-border rather than just the first — the other two are each
+ * declared once, in globals.css, as a color-mix() nested off
+ * --tr-booking-color; browsers resolve a nested var() against whatever
+ * --tr-booking-color was AT THE POINT the outer property's OWN inherited
+ * value was last computed, not against a closer override on the same
+ * element — so overriding only the color left fill/border silently stuck on
+ * the default. Computing both mixes here in JS and setting all three custom
+ * properties directly sidesteps that.
  */
 function bookingColourVars(colour: string | null | undefined): React.CSSProperties {
   if (!colour) return {};
   return {
     ["--tr-booking-color" as string]: colour,
     ["--tr-booking-fill" as string]: `color-mix(in srgb, ${colour} 24%, white)`,
+    ["--tr-booking-border" as string]: `color-mix(in srgb, ${colour} 82%, black 18%)`,
   } as React.CSSProperties;
 }
 
@@ -700,8 +702,18 @@ export default function GridCanvas({ initialData, today }: { initialData: GridDa
     if (saved) {
       (async () => {
         await jumpToDate(saved.date);
-        const vp = viewportRef.current;
-        if (vp) vp.scrollTop = saved.scrollTop;
+        // jumpToDate's own scroll (scrollToIndexSettled) finishes its
+        // horizontal settling across two requestAnimationFrame callbacks,
+        // not synchronously — setting scrollTop before those have run risks
+        // it landing before layout has caught up to the new scrollWidth (a
+        // wider/narrower loaded window than the one scrollTop was captured
+        // against). Deferred the same two frames to land after that settles.
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            const vp = viewportRef.current;
+            if (vp) vp.scrollTop = saved.scrollTop;
+          });
+        });
       })();
     } else {
       scrollToIndexSettled(nightsBetween(epochStart, today));
@@ -709,22 +721,38 @@ export default function GridCanvas({ initialData, today }: { initialData: GridDa
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Save the current position on the way out — covers both "clicked into a
-  // booking, then back" and "switched to another nav tab, then back to
-  // Grid" (both unmount this component; simply switching browser TABS does
-  // not, so there's nothing to re-save there). Reads scroll position
-  // directly off the virtualizer/viewport at unmount time rather than
-  // tracking it via a scroll listener — simpler, and the only moment this
-  // actually needs to be current.
+  // Continuously-updated record of "where the grid currently is" — read at
+  // unmount to persist (see the effect below). Deliberately NOT computed
+  // fresh inside that unmount cleanup itself: relying on viewportRef.current
+  // and the virtualizer's live getVirtualItems() still being trustworthy at
+  // the exact moment a component is torn down is the kind of thing that
+  // works in dev and silently stops working after some unrelated React/
+  // Next upgrade changes exactly when refs get detached relative to effect
+  // cleanup. A plain ref updated on every real scroll event has no such
+  // ordering dependency — by the time unmount happens, it's already holding
+  // whatever the last real value was.
+  const latestGridViewRef = useRef<GridViewState | null>(null);
   useEffect(() => {
-    return () => {
-      const vp = viewportRef.current;
-      if (!vp) return;
+    const vp = viewportRef.current;
+    if (!vp) return;
+    function recordCurrentView() {
       const items = virtualizer.getVirtualItems();
       if (items.length === 0) return;
-      saveGridViewState({ date: addDays(epochStart, items[0].index), scrollTop: vp.scrollTop });
+      latestGridViewRef.current = { date: addDays(epochStart, items[0].index), scrollTop: vp!.scrollTop };
+    }
+    recordCurrentView();
+    vp.addEventListener("scroll", recordCurrentView, { passive: true });
+    return () => vp.removeEventListener("scroll", recordCurrentView);
+  }, [virtualizer, epochStart]);
+
+  // Save on the way out — covers both "clicked into a booking, then back"
+  // and "switched to another nav tab, then back to Grid" (both unmount this
+  // component; simply switching browser TABS does not, so there's nothing
+  // to re-save there).
+  useEffect(() => {
+    return () => {
+      if (latestGridViewRef.current) saveGridViewState(latestGridViewRef.current);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function fetchWindow(start: ISODate, days: number) {
