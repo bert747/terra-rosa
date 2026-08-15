@@ -4,6 +4,7 @@ import { db } from "../src/db";
 import { bookings, rooms, guestCategories } from "../src/db/schema";
 import { count, eq } from "drizzle-orm";
 import { findAvailableBeds } from "../src/lib/available-beds";
+import { addDays } from "../src/lib/occupancy";
 
 // ---------------------------------------------------------------------------
 // One-off bulk import of historical bookings from the PMS handover
@@ -126,6 +127,43 @@ async function main() {
   });
 
   console.log(`Parsed ${sourceRows.length} booking row(s) from "${filePath}".`);
+
+  // A "Split Booking" chain's interim legs record their own "Departure
+  // Date" as the last night spent in that room, not this app's own
+  // checkout-day (exclusive) convention — copied straight across, that left
+  // a real 1-night gap between each leg and the next (see
+  // scripts/fix-split-gap-dates.ts, written to correct this for an import
+  // that already ran). Fixed here at the source instead of leaving it for
+  // that follow-up script every time: whichever row a later row's "Split
+  // Booking" points at gets its departureDate pulled forward to match that
+  // later row's own arrivalDate — but ONLY when doing so closes exactly a
+  // 1-night gap; anything already adjacent is left alone (already correct),
+  // and anything else (overlap, multi-night gap) is reported rather than
+  // guessed at, since the source data disagreeing with itself that much
+  // isn't this script's call to silently resolve.
+  const byBookingId = new Map(sourceRows.map((r) => [r.bookingId, r]));
+  let splitGapsClosed = 0;
+  const splitGapAnomalies: string[] = [];
+  for (const row of sourceRows) {
+    if (!row.splitFrom) continue;
+    const predecessor = byBookingId.get(row.splitFrom);
+    if (!predecessor) continue;
+    if (predecessor.departureDate === row.arrivalDate) continue; // already correct
+    if (addDays(predecessor.departureDate, 1) === row.arrivalDate) {
+      predecessor.departureDate = row.arrivalDate;
+      splitGapsClosed += 1;
+    } else {
+      splitGapAnomalies.push(
+        `  Booking #${predecessor.bookingId} (row ${predecessor.rowNum}) departs ${predecessor.departureDate}, ` +
+          `#${row.bookingId} (row ${row.rowNum}) arrives ${row.arrivalDate} — not a plain 1-night gap, left as-is.`
+      );
+    }
+  }
+  if (splitGapsClosed > 0) console.log(`Closed ${splitGapsClosed} 1-night split-chain gap(s) in the source data before import.`);
+  if (splitGapAnomalies.length > 0) {
+    console.log(`${splitGapAnomalies.length} split-chain date mismatch(es) NOT auto-fixed — check these rows:`);
+    splitGapAnomalies.forEach((m) => console.log(m));
+  }
 
   const allRooms = await db.select().from(rooms);
   const roomByName = new Map(allRooms.map((r) => [r.name.trim().toLowerCase(), r]));
