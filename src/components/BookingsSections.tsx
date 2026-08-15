@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import BookingsTable, { type BookingRow, type Column, DEFAULT_COLUMNS, DEFAULT_COLUMN_WIDTHS } from "@/components/BookingsTable";
 import ConfirmModal, { type ConfirmModalState } from "@/components/ConfirmModal";
 import AlertsButton from "@/components/AlertsButton";
+import { pillColourVars } from "@/lib/pill-colour";
 
 const ORDER_STORAGE_KEY = "tr-bookings-column-order";
 const VISIBILITY_STORAGE_KEY = "tr-bookings-column-visibility";
@@ -230,40 +231,37 @@ export default function BookingsSections({
 
   return (
     <>
-      <div style={{ display: "flex", alignItems: "center", marginBottom: 12, flexWrap: "wrap", rowGap: 8 }}>
-        <h1 style={{ fontSize: 18, margin: 0 }}>{pageTitle}</h1>
+      {/* Deliberately nowrap + its own horizontal scroll, not flexWrap —
+          title, guest-type legend, search box and the button cluster all
+          used to sit on one row; adding the search box pushed it over the
+          edge into wrapping onto two on some widths, which read as broken.
+          A narrow window now scrolls this one strip sideways instead. */}
+      <div style={{ display: "flex", alignItems: "center", marginBottom: 12, flexWrap: "nowrap", overflowX: "auto", paddingBottom: 2 }}>
+        <h1 style={{ fontSize: 18, margin: 0, flex: "none", whiteSpace: "nowrap" }}>{pageTitle}</h1>
         {guestCategories.length > 0 && (
-          <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 6, marginLeft: 16 }}>
-            <span className="tr-muted" style={{ fontSize: 12 }}>Guest type:</span>
+          <div style={{ display: "flex", flexWrap: "nowrap", alignItems: "center", gap: 6, marginLeft: 16, flex: "none" }}>
+            <span className="tr-muted" style={{ fontSize: 12, whiteSpace: "nowrap" }}>Guest type:</span>
             {guestCategories.map((c) => (
-              <span
-                key={c.id}
-                className="tr-grid-booking-pill"
-                style={{
-                  position: "static",
-                  ["--tr-booking-color" as string]: c.colour,
-                  ["--tr-booking-fill" as string]: `color-mix(in srgb, ${c.colour} 24%, white)`,
-                }}
-              >
+              <span key={c.id} className="tr-grid-booking-pill" style={{ position: "static", flex: "none", whiteSpace: "nowrap", ...pillColourVars(c.colour) }}>
                 {c.name}
               </span>
             ))}
           </div>
         )}
-        <span style={{ flex: 1 }} />
+        <span style={{ flex: 1, flexShrink: 1 }} />
         <input
           type="search"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           placeholder="Search first name, surname or preferred name…"
           aria-label="Search bookings"
-          style={{ minWidth: 240 }}
+          style={{ minWidth: 240, flexShrink: 0 }}
         />
-        <div style={{ marginRight: 8 }}>
+        <div style={{ marginRight: 8, flexShrink: 0 }}>
           <AlertsButton onChanged={() => router.refresh()} />
         </div>
-        <a href="/bookings/new"><button className="primary">New booking</button></a>
-        <div style={{ position: "relative", marginLeft: 8 }}>
+        <a href="/bookings/new" style={{ flexShrink: 0 }}><button className="primary">New booking</button></a>
+        <div style={{ position: "relative", marginLeft: 8, flexShrink: 0 }}>
           <button type="button" className="tr-columns-trigger" onClick={() => setColumnsMenuOpen((v) => !v)}>
             <span aria-hidden="true" className="tr-columns-trigger-icon">☰</span>
             Columns

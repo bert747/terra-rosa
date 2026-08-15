@@ -1216,6 +1216,11 @@ button:hover {
      entirely rather than chasing per-fragment position math. */
   background-color: var(--tr-booking-fill);
   border: 1px solid var(--tr-booking-border);
+  /* Overrides the shorthand's 1px above for a very light/white colour,
+     which otherwise reads as a smaller/fainter pill than its neighbours
+     even at the same box size — see --tr-booking-border-width in
+     pillColourVars (src/lib/pill-colour.ts). */
+  border-width: var(--tr-booking-border-width, 1px);
   border-radius: 12px;
   color: var(--tr-text);
   text-decoration: none;

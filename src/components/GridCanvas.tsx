@@ -9,6 +9,7 @@ import type { GridData } from "@/lib/grid-data";
 import type { PlannedChangeLine } from "@/lib/bed-moves";
 import type { SplitSiblingBooking } from "@/lib/split-siblings";
 import { addDays, type ISODate } from "@/lib/occupancy";
+import { pillColourVars } from "@/lib/pill-colour";
 import ToastStack, { type ToastMessage } from "@/components/ToastStack";
 import ContextMenu, { type ContextMenuItem, type ContextMenuState } from "@/components/ContextMenu";
 import BedActionModal, { type BedActionModalState } from "@/components/BedActionModal";
@@ -115,23 +116,20 @@ function saveGridViewState(state: GridViewState) {
 
 /**
  * Inline style overriding a booking pill's colour to its guest category's
- * own colour. Sets --tr-booking-color, --tr-booking-fill AND
- * --tr-booking-border rather than just the first — the other two are each
- * declared once, in globals.css, as a color-mix() nested off
- * --tr-booking-color; browsers resolve a nested var() against whatever
- * --tr-booking-color was AT THE POINT the outer property's OWN inherited
- * value was last computed, not against a closer override on the same
- * element — so overriding only the color left fill/border silently stuck on
- * the default. Computing both mixes here in JS and setting all three custom
- * properties directly sidesteps that.
+ * own colour. Sets --tr-booking-color, --tr-booking-fill, --tr-booking-
+ * border AND --tr-booking-border-width rather than just the first — the
+ * other three are each declared once, in globals.css, as a color-mix()/
+ * fixed value nested off --tr-booking-color; browsers resolve a nested
+ * var() against whatever --tr-booking-color was AT THE POINT the outer
+ * property's OWN inherited value was last computed, not against a closer
+ * override on the same element — so overriding only the color left the
+ * others silently stuck on the default. See pillColourVars (src/lib/pill-
+ * colour.ts, shared with the Layout settings page) for what actually
+ * computes them.
  */
 function bookingColourVars(colour: string | null | undefined): React.CSSProperties {
   if (!colour) return {};
-  return {
-    ["--tr-booking-color" as string]: colour,
-    ["--tr-booking-fill" as string]: `color-mix(in srgb, ${colour} 24%, white)`,
-    ["--tr-booking-border" as string]: `color-mix(in srgb, ${colour} 82%, black 18%)`,
-  } as React.CSSProperties;
+  return pillColourVars(colour) as React.CSSProperties;
 }
 
 /**

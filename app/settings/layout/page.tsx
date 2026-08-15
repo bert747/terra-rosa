@@ -8,6 +8,7 @@ import ConfirmModal, { type ConfirmModalState } from "@/components/ConfirmModal"
 import { DORM_STORAGE_FLOOR_NAME } from "@/lib/dorm-storage";
 import { sortRooms } from "@/lib/rooms";
 import ColourPicker from "@/components/ColourPicker";
+import { pillColourVars } from "@/lib/pill-colour";
 
 function todayISO(): string {
   return new Date().toISOString().slice(0, 10);
@@ -502,17 +503,14 @@ export default function PropertyLayoutPage() {
   const [editingGuestCategoryColourId, setEditingGuestCategoryColourId] = useState<number | null>(null);
 
   // Same colour-var pattern as GridCanvas.tsx's bookingColourVars — sets
-  // --tr-booking-color, --tr-booking-fill AND --tr-booking-border directly
-  // (rather than relying on the latter two's own color-mix() to pick up a
-  // nested override), since browsers don't re-resolve that nested var()
-  // against a closer override on the same element. See that function's own
-  // longer comment for the full story.
+  // --tr-booking-color, --tr-booking-fill, --tr-booking-border AND
+  // --tr-booking-border-width directly (rather than relying on the latter
+  // three's own color-mix()/fixed value to pick up a nested override),
+  // since browsers don't re-resolve that nested var() against a closer
+  // override on the same element. See pillColourVars (src/lib/pill-
+  // colour.ts, shared with GridCanvas.tsx) for what actually computes them.
   function guestCategoryColourVars(colour: string): React.CSSProperties {
-    return {
-      ["--tr-booking-color" as string]: colour,
-      ["--tr-booking-fill" as string]: `color-mix(in srgb, ${colour} 24%, white)`,
-      ["--tr-booking-border" as string]: `color-mix(in srgb, ${colour} 82%, black 18%)`,
-    } as React.CSSProperties;
+    return pillColourVars(colour) as React.CSSProperties;
   }
 
   async function submitNewGuestCategory(e: React.FormEvent) {
