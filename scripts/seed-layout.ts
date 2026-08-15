@@ -79,9 +79,13 @@ const LAYOUT: FloorSeed[] = [
   },
 ];
 
-function todayISO(): string {
-  return new Date().toISOString().slice(0, 10);
-}
+// Every bed's placement is anchored to this date, not today. findAvailableBeds
+// only offers a bed for a date if its bedLocations placement started on or
+// before that date (src/lib/available-beds.ts) — anchoring to "today" would
+// make every bed invisible for any date before the seed actually ran, which
+// breaks backfilling historical bookings (see scripts/import-bookings.ts)
+// that predate this seed. Safely earlier than any real booking data.
+const LAYOUT_START_DATE = "2000-01-01";
 
 async function main() {
   const [{ value: bookingCount }] = await db.select({ value: count() }).from(bookings);
@@ -102,7 +106,7 @@ async function main() {
     await tx.delete(rooms);
     await tx.delete(floors);
 
-    const today = todayISO();
+    const today = LAYOUT_START_DATE;
     let floorCount = 0;
     let roomCount = 0;
     let bedInsertCount = 0;
