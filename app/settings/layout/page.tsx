@@ -26,6 +26,7 @@ interface Room {
   floorId: number;
   categoryId: number | null;
   excludeFromSuggestions: boolean;
+  rank: number;
 }
 
 interface RoomCategory {
@@ -358,6 +359,43 @@ export default function PropertyLayoutPage() {
       })
     );
     if (ok) load();
+  }
+
+  // Drag-to-reorder rooms within a single floor — same one-axis HTML5 drag
+  // pattern as the Room Categories list below (see handleCategoryDrop's own
+  // comment). Only ever reorders rooms belonging to `floorId`; a room can't
+  // be dragged onto a different floor's list (use the existing "Move"
+  // control for that), so ranks are recomputed as a clean 0..n-1 sequence
+  // scoped to that one floor only, leaving every other floor's ranks alone.
+  const [draggingRoomId, setDraggingRoomId] = useState<number | null>(null);
+  const [dragOverRoomId, setDragOverRoomId] = useState<number | null>(null);
+
+  async function handleRoomDrop(floorId: number, targetId: number) {
+    setDragOverRoomId(null);
+    if (!draggingRoomId || draggingRoomId === targetId) return;
+    const ordered = sortRooms(rooms.filter((r) => r.floorId === floorId));
+    const fromIndex = ordered.findIndex((r) => r.id === draggingRoomId);
+    const toIndex = ordered.findIndex((r) => r.id === targetId);
+    if (fromIndex === -1 || toIndex === -1) return;
+    const [moved] = ordered.splice(fromIndex, 1);
+    ordered.splice(toIndex, 0, moved);
+    setDraggingRoomId(null);
+    const rankById = new Map(ordered.map((r, i) => [r.id, i]));
+    // Optimistic local reorder so the list doesn't visually snap back while
+    // the PATCH calls are in flight.
+    setRooms((prev) => prev.map((r) => (rankById.has(r.id) ? { ...r, rank: rankById.get(r.id)! } : r)));
+    await Promise.all(
+      ordered.map((r, i) =>
+        r.rank === i
+          ? Promise.resolve()
+          : fetch(`/api/rooms/${r.id}`, {
+              method: "PATCH",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ rank: i }),
+            })
+      )
+    );
+    load();
   }
 
   // --- Room categories (see room_categories' own schema comment) --------
@@ -738,7 +776,7 @@ export default function PropertyLayoutPage() {
               layout, so it's hidden here rather than editable/deletable. */}
           <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
             {floors.filter((floor) => floor.name !== DORM_STORAGE_FLOOR_NAME).map((floor) => {
-              const floorRooms = rooms.filter((r) => r.floorId === floor.id);
+              const floorRooms = sortRooms(rooms.filter((r) => r.floorId === floor.id));
               const collapsed = collapsedFloorIds.has(floor.id);
 
               return (
@@ -807,9 +845,34 @@ export default function PropertyLayoutPage() {
                       {floorRooms.map((room) => (
                         <li
                           key={room.id}
-                          style={{ borderTop: "1px solid var(--tr-border)", padding: "6px 0" }}
+                          draggable={editMode && editingRoomId !== room.id && movingRoomId !== room.id}
+                          onDragStart={() => setDraggingRoomId(room.id)}
+                          onDragOver={(e) => {
+                            if (!editMode) return;
+                            e.preventDefault();
+                            if (dragOverRoomId !== room.id) setDragOverRoomId(room.id);
+                          }}
+                          onDragLeave={() => setDragOverRoomId((id) => (id === room.id ? null : id))}
+                          onDrop={(e) => {
+                            if (!editMode) return;
+                            e.preventDefault();
+                            handleRoomDrop(floor.id, room.id);
+                          }}
+                          onDragEnd={() => {
+                            setDraggingRoomId(null);
+                            setDragOverRoomId(null);
+                          }}
+                          style={{
+                            borderTop: "1px solid var(--tr-border)",
+                            padding: "6px 0",
+                            opacity: draggingRoomId === room.id ? 0.4 : 1,
+                            background: dragOverRoomId === room.id && draggingRoomId !== room.id ? "var(--tr-accent-soft)" : undefined,
+                          }}
                         >
                         <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                          {editMode && editingRoomId !== room.id && movingRoomId !== room.id && (
+                            <span aria-hidden="true" className="tr-muted" style={{ fontSize: 12, letterSpacing: "-1px", cursor: "grab" }}>⠿</span>
+                          )}
                           {editingRoomId === room.id ? (
                             <form onSubmit={(e) => submitRoomEdit(e, room)} style={{ display: "flex", gap: 6, flex: 1 }}>
                               <input

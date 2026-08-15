@@ -14,4 +14,6 @@ export const COLOUR_PRESETS: string[] = [
   "#ceab77", // sand
   "#cc909c", // clay pink
   "#84b3bb", // teal
+  "#ffffff", // white
+  "#9a9a9a", // grey
 ];

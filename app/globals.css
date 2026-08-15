@@ -1014,8 +1014,12 @@ button:hover {
      left-hand columns, meant to always sit ON TOP of whatever booking pill
      scrolls underneath them horizontally. At 1 they used to lose that
      fight (a pill would paint over "Ashrami"/"Single" as it scrolled
-     under), which read as booking pills "floating over" the room labels. */
-  z-index: 3;
+     under), which read as booking pills "floating over" the room labels.
+     4, not 3: a same-day-turnover pill's .tr-grid-booking-cell-split-tail
+     (below) also needs to beat a NEXT-door booking cell, and sits at 3 to
+     do that — tying with this column at 3 let a split-tail win the DOM-
+     order tiebreak and paint over the room/bed label after all. */
+  z-index: 4;
 }
 
 .tr-grid-room {
@@ -1049,7 +1053,7 @@ button:hover {
 
 .tr-grid th.tr-grid-room,
 .tr-grid th.tr-grid-bed {
-  z-index: 3;
+  z-index: 4;
 }
 
 .tr-grid-cell {

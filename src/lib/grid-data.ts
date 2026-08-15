@@ -181,12 +181,17 @@ export async function loadGridData(start: ISODate, days: number): Promise<GridDa
       floorId: r.floorId,
       floorName: floorNameById.get(r.floorId) ?? "",
       excludeFromCapacity: r.excludeFromCapacity,
+      rank: r.rank,
     }))
     .sort((a, b) => {
       // Dorm Storage (and anything else ever flagged excludeFromCapacity)
       // always sorts after every normal room, regardless of floor/name.
       if (a.excludeFromCapacity !== b.excludeFromCapacity) return a.excludeFromCapacity ? 1 : -1;
-      return a.floorName.localeCompare(b.floorName) || a.name.localeCompare(b.name, undefined, { numeric: true });
+      // Within a floor, room order follows the same manually-set `rank` as
+      // /settings/layout's drag-to-reorder (see rooms.rank's schema
+      // comment) — falls back to natural name order while every room in
+      // the floor still shares rank 0 (i.e. nobody's dragged one yet).
+      return a.floorName.localeCompare(b.floorName) || a.rank - b.rank || a.name.localeCompare(b.name, undefined, { numeric: true });
     });
 
   const gridBedInfos: GridBedInfo[] = allBeds.map((b) => ({ bedId: b.id, type: b.type }));

@@ -22,13 +22,17 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   if (body.floorId !== undefined) updates.floorId = Number(body.floorId);
   if (body.categoryId !== undefined) updates.categoryId = body.categoryId ? Number(body.categoryId) : null;
   if (body.excludeFromSuggestions !== undefined) updates.excludeFromSuggestions = Boolean(body.excludeFromSuggestions);
+  if (body.rank !== undefined) updates.rank = Number(body.rank);
 
   const [room] = await db.update(rooms).set(updates).where(eq(rooms.id, Number(id))).returning();
   if (!room) return NextResponse.json({ error: "Room not found" }, { status: 404 });
 
   if (updates.categoryId !== undefined || updates.excludeFromSuggestions !== undefined) {
     await logChange({ category: "layout", action: "Updated room suggestions setting", summary: `Updated "${room.name}"'s move-suggestion settings` });
-  } else {
+  } else if (updates.rank === undefined) {
+    // Drag-to-reorder (see the Layout page) sends just `rank`, once per row
+    // landed in a new position — logging each of those would spam the
+    // change log for what's really one user action.
     await logChange({ category: "layout", action: "Updated room", summary: `Updated room "${room.name}"` });
   }
 

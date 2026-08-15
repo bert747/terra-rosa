@@ -40,6 +40,10 @@ const YEARS_FORWARD = 2;
 // balloons no matter how far someone scrolls in one session.
 const ROLLING_WINDOW_DAYS = 60;
 const EDGE_BUFFER_DAYS = 20;
+// Dampens native mouse-wheel/trackpad scroll speed over the grid viewport —
+// see the wheel listener near flushPanScroll for why. 1 = native (unchanged)
+// speed; smaller is slower.
+const WHEEL_SCROLL_FACTOR = 0.45;
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 // Plain line-art icon in currentColor, matching CalendarIcon's own style
@@ -73,6 +77,40 @@ function isWeekend(date: ISODate): boolean {
 
 function isPastDay(date: ISODate, today: ISODate): boolean {
   return date < today;
+}
+
+// Remembers roughly where staff last left the grid (which date was leftmost
+// on screen, how far scrolled down) so navigating away — into a booking,
+// to another page's nav tab, whatever — and back doesn't dump them back at
+// "today" every time. sessionStorage (not localStorage): scoped to this
+// browser tab's lifetime, which matches "where I left the grid" better than
+// a value that'd otherwise persist forever across unrelated sessions/days.
+const GRID_VIEW_STATE_KEY = "tr-grid-view-state";
+
+interface GridViewState {
+  date: ISODate;
+  scrollTop: number;
+}
+
+function readSavedGridViewState(): GridViewState | null {
+  try {
+    const raw = sessionStorage.getItem(GRID_VIEW_STATE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || !isIsoDate(parsed.date) || typeof parsed.scrollTop !== "number") return null;
+    return { date: parsed.date, scrollTop: parsed.scrollTop };
+  } catch {
+    return null;
+  }
+}
+
+function saveGridViewState(state: GridViewState) {
+  try {
+    sessionStorage.setItem(GRID_VIEW_STATE_KEY, JSON.stringify(state));
+  } catch {
+    // Private browsing / storage full / whatever — losing the remembered
+    // position isn't worth surfacing an error over.
+  }
 }
 
 /**
@@ -182,6 +220,33 @@ function plannedChangeConfigDescription(lines: PlannedChangeLine[]): string {
  */
 function pillDisplayName(booking: GridBooking): string {
   return booking.preferredName || booking.firstName;
+}
+
+/**
+ * A long-stay pill's name (see .tr-grid-pill-name) sits at the LEFT edge of
+ * its <a> — normal for a stay of a few days, since arrival and the name are
+ * both on screen together. But the pill's own <td> spans its full run of
+ * nights regardless of how much of that is currently scrolled into view: for
+ * a months-long booking, scrolling into the middle of the stay leaves the
+ * coloured pill filling the screen with its name scrolled off past the
+ * frozen Room/Bed columns, unreadable with nothing on screen saying whose
+ * booking it is. Rather than always showing a name tooltip (most bookings
+ * are short enough that the name's already sitting right there — repeating
+ * it in a tooltip on every hover would just be noise), this only returns a
+ * value when the name span's own on-screen box doesn't actually overlap the
+ * visible part of the viewport (right of the frozen columns, within the
+ * viewport's own bounds) — i.e. exactly the case where the name truly isn't
+ * visible right now.
+ */
+function pillNameIfHidden(pillEl: HTMLElement, actions: GridActions, name: string): string | undefined {
+  const vp = actions.viewportRef.current;
+  const nameSpan = pillEl.querySelector<HTMLElement>(".tr-grid-pill-name");
+  if (!vp || !nameSpan) return undefined;
+  const nameRect = nameSpan.getBoundingClientRect();
+  const vpRect = vp.getBoundingClientRect();
+  const visibleLeft = vpRect.left + actions.stickyLabelWidth;
+  const hidden = nameRect.right <= visibleLeft || nameRect.left >= vpRect.right;
+  return hidden ? name : undefined;
 }
 
 // Bed-type names (e.g. the stored "1.5-bed") get Title Cased with dashes
@@ -628,9 +693,37 @@ export default function GridCanvas({ initialData, today }: { initialData: GridDa
     [virtualizer, labelColWidths.room, labelColWidths.bed]
   );
 
-  // Scroll to "today" on first mount.
+  // Scroll to wherever staff last left the grid (see GridViewState), falling
+  // back to "today" the first time there's nothing saved yet.
   useEffect(() => {
-    scrollToIndexSettled(nightsBetween(epochStart, today));
+    const saved = readSavedGridViewState();
+    if (saved) {
+      (async () => {
+        await jumpToDate(saved.date);
+        const vp = viewportRef.current;
+        if (vp) vp.scrollTop = saved.scrollTop;
+      })();
+    } else {
+      scrollToIndexSettled(nightsBetween(epochStart, today));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Save the current position on the way out — covers both "clicked into a
+  // booking, then back" and "switched to another nav tab, then back to
+  // Grid" (both unmount this component; simply switching browser TABS does
+  // not, so there's nothing to re-save there). Reads scroll position
+  // directly off the virtualizer/viewport at unmount time rather than
+  // tracking it via a scroll listener — simpler, and the only moment this
+  // actually needs to be current.
+  useEffect(() => {
+    return () => {
+      const vp = viewportRef.current;
+      if (!vp) return;
+      const items = virtualizer.getVirtualItems();
+      if (items.length === 0) return;
+      saveGridViewState({ date: addDays(epochStart, items[0].index), scrollTop: vp.scrollTop });
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -747,6 +840,31 @@ export default function GridCanvas({ initialData, today }: { initialData: GridDa
     vp.scrollLeft = pending.left;
     vp.scrollTop = pending.top;
   }, []);
+
+  // Mouse-wheel/trackpad scrolling over this dense a grid, at the browser's
+  // native (un-dampened) speed, flew past several days/rows per notch —
+  // reported as "way too fast" compared to a normal page. Reusing the same
+  // rAF-batched pendingScrollRef/flushPanScroll plumbing as drag-to-pan
+  // above, just fed from wheel deltas scaled down by WHEEL_SCROLL_FACTOR
+  // instead of 1:1 pointer movement. Attached as a real native listener
+  // (not a React onWheel prop) with { passive: false } — React has attached
+  // "wheel" as a passive root listener since v17 for scroll-perf reasons,
+  // which silently ignores preventDefault() called from a plain JSX handler.
+  useEffect(() => {
+    const vp = viewportRef.current;
+    if (!vp) return;
+    function onWheel(e: WheelEvent) {
+      e.preventDefault();
+      const current = pendingScrollRef.current ?? { left: vp!.scrollLeft, top: vp!.scrollTop };
+      pendingScrollRef.current = {
+        left: current.left + e.deltaX * WHEEL_SCROLL_FACTOR,
+        top: current.top + e.deltaY * WHEEL_SCROLL_FACTOR,
+      };
+      if (panRafRef.current == null) panRafRef.current = requestAnimationFrame(flushPanScroll);
+    }
+    vp.addEventListener("wheel", onWheel, { passive: false });
+    return () => vp.removeEventListener("wheel", onWheel);
+  }, [flushPanScroll]);
 
   const onPointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     if (e.button !== 0) return;
@@ -1957,9 +2075,11 @@ export default function GridCanvas({ initialData, today }: { initialData: GridDa
       showHoverDetails,
       bedInfoById,
       jumpToSibling,
+      viewportRef,
+      stickyLabelWidth: labelColWidths.room + labelColWidths.bed,
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [data.start, data.days, data.dormStorageRoomId, today, router, panning, roomCellStyle, bedCellStyle, data.splitGroups, showSharesWithText, showHoverDetails, bedInfoById]
+    [data.start, data.days, data.dormStorageRoomId, today, router, panning, roomCellStyle, bedCellStyle, data.splitGroups, showSharesWithText, showHoverDetails, bedInfoById, labelColWidths.room, labelColWidths.bed]
   );
 
   // --- Visible-column geometry, shared by every row -------------------------
@@ -2593,6 +2713,10 @@ interface GridActions {
   bedInfoById: Map<number, { bedLabel: string; roomName: string }>;
   /** Jumps to the other part of a split booking's date AND row, flashing it once it's in view — see the component's own jumpToSibling. */
   jumpToSibling: (bookingId: number, dateStr: ISODate) => Promise<void>;
+  /** The scrollable grid viewport itself — used by renderBookingPill to work out whether a long booking's own name (pinned at the pill's left edge) has scrolled out of view behind the frozen Room/Bed columns; see pillNameIfHidden. */
+  viewportRef: React.RefObject<HTMLDivElement | null>;
+  /** Width of the frozen Room+Bed columns — the same value as roomCellStyle.width + bedCellStyle.width, passed separately since pillNameIfHidden needs a plain number, not two style objects. */
+  stickyLabelWidth: number;
 }
 
 /**
@@ -4424,13 +4548,28 @@ function renderBookingPill(run: CellSpec[], actions: GridActions) {
         // being hovered, which visibly clashed with its own border and, for
         // two same-day-turnover parts sitting flush against each other,
         // pinched into a figure-eight where the two rings met.
-        onMouseEnter={() => {
+        onMouseEnter={(e) => {
           siblings.filter((s) => s.id !== booking.id).forEach((s) => setSiblingHoverHighlight(s.id));
           setOwnHoverHighlight(booking.id);
+          const nameTooltip = pillNameIfHidden(e.currentTarget, actions, booking.guestName);
+          if (nameTooltip) e.currentTarget.setAttribute("data-tooltip", nameTooltip);
         }}
-        onMouseLeave={() => {
+        // Recomputed on every move, not just on enter: a wheel/trackpad
+        // scroll while the cursor sits still over the same pill doesn't
+        // re-fire mouseenter (the pointer never actually leaves the
+        // element), so a name that scrolls into or out of view mid-hover
+        // needs this to catch up. TooltipHost's own global "hide on any
+        // scroll" listener already dismisses whatever's showing the instant
+        // a scroll happens, so this only ever affects the NEXT hover frame.
+        onMouseMove={(e) => {
+          const nameTooltip = pillNameIfHidden(e.currentTarget, actions, booking.guestName);
+          if (nameTooltip) e.currentTarget.setAttribute("data-tooltip", nameTooltip);
+          else e.currentTarget.removeAttribute("data-tooltip");
+        }}
+        onMouseLeave={(e) => {
           siblings.filter((s) => s.id !== booking.id).forEach((s) => clearSiblingHoverHighlight(s.id));
           clearOwnHoverHighlight(booking.id);
+          e.currentTarget.removeAttribute("data-tooltip");
         }}
       >
         {!startsHere && (

@@ -106,6 +106,11 @@ export const rooms = pgTable("rooms", {
   // now — see the "Friends & Family" guest category) the rooms only ever
   // used for friends & family guests, which staff still place by hand.
   excludeFromSuggestions: boolean("exclude_from_suggestions").notNull().default(false),
+  // Manual display order within a floor (lower = earlier), drag-to-reorder
+  // in Layout settings — same pattern as roomCategories.rank above. Every
+  // room defaults to 0, so until someone actually drags a row, sortRooms()
+  // falls through to its natural-name tiebreak and nothing changes.
+  rank: integer("rank").notNull().default(0),
 });
 
 // The catalogue of bed types staff can add inventory of — managed from
