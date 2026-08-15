@@ -9,6 +9,7 @@ import HelpButton from "@/components/HelpButton";
 import ConfirmModal, { type ConfirmModalState } from "@/components/ConfirmModal";
 import ColourPicker from "@/components/ColourPicker";
 import { COLOUR_PRESETS } from "@/lib/colour-presets";
+import { pillColourVars } from "@/lib/pill-colour";
 
 function todayIso(): string {
   return new Date().toISOString().slice(0, 10);
@@ -176,10 +177,12 @@ export default function EventsPage() {
                   // Same stripe + pale-tint pattern as BookingsTable's own
                   // guest-category row — see that component's identical
                   // comment for why the stripe goes through a CSS variable
-                  // rather than a raw inline box-shadow.
+                  // rather than a raw inline box-shadow, and why the stripe
+                  // itself uses pillColourVars' darkened --tr-booking-border
+                  // rather than the raw colour (invisible for white/pale).
                   ...(ev.colour
                     ? ({
-                        ["--tr-row-stripe" as string]: ev.colour,
+                        ["--tr-row-stripe" as string]: pillColourVars(ev.colour)["--tr-booking-border"],
                         backgroundColor: `color-mix(in srgb, ${ev.colour} 24%, white)`,
                       } as React.CSSProperties)
                     : {}),

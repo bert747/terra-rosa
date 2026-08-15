@@ -2,6 +2,7 @@
 
 import { useMemo, useRef, useState } from "react";
 import ContextMenu, { type ContextMenuItem, type ContextMenuState } from "@/components/ContextMenu";
+import { pillColourVars } from "@/lib/pill-colour";
 
 export interface BookingRow {
   id: number;
@@ -318,11 +319,15 @@ export default function BookingsTable({
               // The stripe itself is a CSS variable, not a raw inline
               // box-shadow — see .tr-row-link's own comment in globals.css
               // for why: an inline box-shadow would silently block the
-              // :hover ring from ever combining with it.
+              // :hover ring from ever combining with it. The stripe colour
+              // comes from pillColourVars' --tr-booking-border (darkened for
+              // a white/very pale category), not the raw colour — a raw
+              // white stripe on this row's own near-white background was
+              // invisible, same root cause as the pill border fix.
               style={
                 row.guestCategoryColour
                   ? ({
-                      ["--tr-row-stripe" as string]: row.guestCategoryColour,
+                      ["--tr-row-stripe" as string]: pillColourVars(row.guestCategoryColour)["--tr-booking-border"],
                       backgroundColor: `color-mix(in srgb, ${row.guestCategoryColour} 24%, white)`,
                     } as React.CSSProperties)
                   : undefined
