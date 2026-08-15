@@ -117,6 +117,9 @@ export default async function BookingsPage() {
     return {
       id: b.id,
       guestName: displayGuestName(b),
+      firstName: b.firstName,
+      lastName: b.lastName,
+      preferredName: b.preferredName,
       roomName: roomNameForBooking(b.bedId, b.arrivalDate),
       arrivalDate: formatDateUk(b.arrivalDate),
       departureDate: formatDateUk(b.departureDate),

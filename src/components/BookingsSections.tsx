@@ -89,6 +89,7 @@ export default function BookingsSections({
   const [splitByArrival, setSplitByArrival] = useState(true);
   const [columnsMenuOpen, setColumnsMenuOpen] = useState(false);
   const [confirmState, setConfirmState] = useState<ConfirmModalState | null>(null);
+  const [search, setSearch] = useState("");
 
   // page.tsx (the server component that computes `sections`) re-fetches on
   // navigation but not automatically after a client-side mutation like this
@@ -158,13 +159,30 @@ export default function BookingsSections({
     }
   }
 
+  // Matches on first name, surname, or preferred name — not the combined
+  // "First (Preferred) Last" guestName column text, so e.g. searching
+  // "Frabbie" still finds "Frank (Frabbie) Jones" even though "Frabbie"
+  // never appears as its own word boundary in that combined string (it
+  // does, but matching the raw fields directly is simpler and doesn't rely
+  // on displayGuestName's exact formatting staying in sync with this).
+  const query = search.trim().toLowerCase();
+  function matchesSearch(row: BookingRow): boolean {
+    if (!query) return true;
+    return (
+      row.firstName.toLowerCase().includes(query) ||
+      row.lastName.toLowerCase().includes(query) ||
+      (row.preferredName?.toLowerCase().includes(query) ?? false)
+    );
+  }
+  const searchedSections: BookingsSection[] = sections.map((s) => ({ ...s, rows: s.rows.filter(matchesSearch) }));
+
   // With the toggle off, every section's rows just flow into one combined
   // list — still the same underlying rows/order (arriving-soonest first,
   // then the rest), just without the "arriving this week vs. everyone
   // else" heading splitting them up.
   const displaySections: BookingsSection[] = splitByArrival
-    ? sections
-    : [{ title: "All bookings", rows: sections.flatMap((s) => s.rows) }];
+    ? searchedSections
+    : [{ title: "All bookings", rows: searchedSections.flatMap((s) => s.rows) }];
 
   // The page's own <h1> and the first section's heading used to both say
   // essentially "Bookings" — folded into one line here instead: "Bookings
@@ -201,6 +219,14 @@ export default function BookingsSections({
             ))}
           </div>
         )}
+        <input
+          type="search"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search first name, surname or preferred name…"
+          aria-label="Search bookings"
+          style={{ marginLeft: 16, minWidth: 260 }}
+        />
         <span style={{ flex: 1 }} />
         <div style={{ marginRight: 8 }}>
           <AlertsButton onChanged={() => router.refresh()} />
@@ -268,7 +294,9 @@ export default function BookingsSections({
           onDeleteRow={deleteRow}
         />
       ) : (
-        <p className="tr-muted" style={{ marginBottom: 16 }}>{firstSection.emptyMessage ?? "No bookings."}</p>
+        <p className="tr-muted" style={{ marginBottom: 16 }}>
+          {query ? `No bookings match "${search.trim()}".` : firstSection.emptyMessage ?? "No bookings."}
+        </p>
       )}
 
       {restSections.map((section) => (
@@ -288,7 +316,9 @@ export default function BookingsSections({
               onDeleteRow={deleteRow}
             />
           ) : (
-            <p className="tr-muted" style={{ marginBottom: 16 }}>{section.emptyMessage ?? "No bookings."}</p>
+            <p className="tr-muted" style={{ marginBottom: 16 }}>
+              {query ? `No bookings match "${search.trim()}".` : section.emptyMessage ?? "No bookings."}
+            </p>
           )}
         </div>
       ))}

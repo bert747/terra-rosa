@@ -15,6 +15,12 @@ export interface BookingRow {
   guestType: string;
   dietary: string;
   guestCategoryColour: string | null;
+  // Raw (untouched by displayGuestName's "First (Preferred) Last" combining)
+  // — carried along purely for BookingsSections' search box to match
+  // against, not rendered as their own columns.
+  firstName: string;
+  lastName: string;
+  preferredName: string | null;
 }
 
 export interface Column {
