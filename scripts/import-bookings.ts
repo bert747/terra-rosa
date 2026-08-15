@@ -33,14 +33,12 @@ import { findAvailableBeds } from "../src/lib/available-beds";
 // file you created and reviewed yourself, never attacker-supplied input.
 // ---------------------------------------------------------------------------
 
-// Sheet value -> this app's guest_categories.name. "Retreat" assumes you've
-// renamed the seeded "Resident" category to "Retreat" (Settings > Layout)
-// before running this — rename it back here instead if you haven't.
+// Sheet value -> this app's guest_categories.name.
 const GUEST_TYPE_MAP: Record<string, string> = {
   "F&F": "Friends & Family",
   Guest: "Guest",
   Ashram: "Ashrami",
-  Retreat: "Retreat",
+  Retreat: "Resident",
 };
 
 // Fill in only if a sheet room name doesn't match (case aside) a room name

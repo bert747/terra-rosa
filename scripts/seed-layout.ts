@@ -25,53 +25,56 @@ interface FloorSeed {
 }
 
 const single = (n: number): BedTypeSeed[] => Array(n).fill("Single");
-const halfBed = (n: number): BedTypeSeed[] => Array(n).fill("1.5-bed");
 
+// Real current property layout (replaces the old placeholder dev list).
+// Every bed is seeded as a Single for now since the PMS handover data this
+// was built from doesn't record bed type (see scripts/import-bookings.ts) —
+// re-type individual beds afterward via the beds API once known. Room names
+// match scripts/import-bookings.ts's source spreadsheet exactly so imported
+// bookings auto-match a room here without needing a ROOM_ALIASES entry.
 const LAYOUT: FloorSeed[] = [
   {
     name: "Floor 1",
     rooms: [
-      { name: "Ensuite 1", beds: single(2) },
-      { name: "Sea 1", beds: single(4) },
-      { name: "Courtyard 1", beds: single(2) },
+      { name: "Ensuite 1", beds: single(4) },
+      { name: "Sea 1", beds: single(5) },
+      { name: "Courtyard 1", beds: single(5) },
       { name: "Back room", beds: single(2) },
-      { name: "Infirmary", beds: [...single(1), ...halfBed(1)] },
-      { name: "Ashrami", beds: [...single(1), ...halfBed(1)] },
+      { name: "Infirmary", beds: single(4) },
+      { name: "Ashrami Room", beds: single(6) },
     ],
   },
   {
     name: "Floor 2",
     rooms: [
       { name: "Ensuite 2", beds: single(2) },
-      { name: "sea 2", beds: single(2) },
-      { name: "Courtyard 2", beds: [...single(1), ...halfBed(1)] },
-      { name: "Dorm 2", beds: single(5) },
+      { name: "Sea 2", beds: single(4) },
+      { name: "Courtyard 2", beds: single(5) },
+      { name: "Dorm 2", beds: single(6) },
     ],
   },
   {
-    name: "Monks 1",
+    name: "Monks",
     rooms: [
-      { name: "Monk 1", beds: single(1) },
+      { name: "Monk 1", beds: single(4) },
       { name: "Monk 2", beds: single(2) },
       { name: "Monk 3", beds: single(3) },
-    ],
-  },
-  {
-    name: "Monks 2",
-    rooms: [
-      { name: "Monk 4", beds: single(2) },
+      { name: "Monk 4", beds: single(3) },
       { name: "Monk 5", beds: single(3) },
-      { name: "Monk 6", beds: halfBed(1) },
-      { name: "Monk 7", beds: single(3) },
+      { name: "Monk 6", beds: single(3) },
+      { name: "Monk 7", beds: single(5) },
     ],
   },
   {
     name: "Outside",
     rooms: [
-      { name: "Close", beds: halfBed(2) },
-      { name: "Far", beds: [...single(1), ...halfBed(1)] },
+      { name: "Close", beds: single(2) },
+      { name: "Far", beds: single(3) },
       { name: "Bunker", beds: single(1) },
-      { name: "Caravan", beds: halfBed(1) },
+      { name: "Van / Caravan", beds: single(2) },
+      { name: "Guardians", beds: single(7) },
+      { name: "Camping", beds: single(20) },
+      { name: "Glamping", beds: single(20) },
     ],
   },
 ];
