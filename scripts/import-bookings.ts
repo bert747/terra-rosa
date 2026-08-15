@@ -39,6 +39,7 @@ const GUEST_TYPE_MAP: Record<string, string> = {
   Guest: "Guest",
   Ashram: "Ashrami",
   Retreat: "Resident",
+  Resident: "Resident",
 };
 
 // Fill in only if a sheet room name doesn't match (case aside) a room name

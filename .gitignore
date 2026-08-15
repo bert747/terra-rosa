@@ -25,7 +25,7 @@ npm-debug.log*
 *-backup-*.json
 
 # guest data handover files (real names/PII — never committed)
-PMS_Upload*.xlsx
+[Pp][Mm][Ss]_[Uu]pload*.xlsx
 tsconfig.tsbuildinfo
 
 # local Claude Code settings
