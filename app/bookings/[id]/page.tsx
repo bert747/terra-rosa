@@ -12,6 +12,7 @@ import SplitMergeConflictModal, { type SplitMergeConflictModalState } from "@/co
 import { useDietaryTagSuggestions } from "@/lib/use-dietary-tag-suggestions";
 import { useGuestCategories } from "@/lib/use-guest-categories";
 import GuestTypeSelect from "@/components/GuestTypeSelect";
+import GuestProfilePicker, { type GuestProfile } from "@/components/GuestProfilePicker";
 
 interface BedOption {
   id: number;
@@ -48,6 +49,7 @@ interface Booking {
   bedId: number | null;
   dietariesTags: string[] | null;
   guestCategoryId: number | null;
+  guestId: number | null;
   allocationIssues: { otherBookingId: number; otherGuestName: string; kind: "room" | "bed" }[];
 }
 
@@ -90,6 +92,8 @@ export default function BookingDetailPage() {
   const [fallbackPairs, setFallbackPairs] = useState<FallbackPair[]>([]);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [dietaryTags, setDietaryTags] = useState<string[]>([]);
+  const [linkedGuest, setLinkedGuest] = useState<GuestProfile | null>(null);
+  const [createGuestProfile, setCreateGuestProfile] = useState(false);
   const dietarySuggestions = useDietaryTagSuggestions();
   const allGuestCategories = useGuestCategories();
   // Active categories, plus this booking's own current one even if it's
@@ -124,6 +128,16 @@ export default function BookingDetailPage() {
     const b: Booking = await fetch(`/api/bookings/${id}`).then((res) => res.json());
     setBooking(b);
     setDietaryTags(Array.isArray(b.dietariesTags) ? b.dietariesTags : []);
+    // The booking's own name/dietary columns are kept mirroring its linked
+    // guest's (see resolveGuestLink), so there's no need to fetch the guest
+    // row separately just to show "linked to X" — this booking's own
+    // current fields already ARE that guest's current fields.
+    setLinkedGuest(
+      b.guestId != null
+        ? { id: b.guestId, firstName: b.firstName, lastName: b.lastName, preferredName: b.preferredName, dietariesTags: b.dietariesTags }
+        : null
+    );
+    setCreateGuestProfile(false);
     setSiblings(b.splitGroupId != null ? await fetch(`/api/bookings/${id}/split-siblings`).then((res) => res.json()) : []);
 
     // Figure out which Bed Type filter actually shows this booking's own
@@ -209,9 +223,11 @@ export default function BookingDetailPage() {
       (booking.sharesBedWithBookingId ?? null) !== draft.sharesBedWithBookingId ||
       (booking.bedId ? String(booking.bedId) : "") !== draft.bedId ||
       (booking.guestCategoryId ? String(booking.guestCategoryId) : "") !== draft.guestCategoryId ||
-      JSON.stringify(booking.dietariesTags ?? []) !== JSON.stringify(dietaryTags)
+      JSON.stringify(booking.dietariesTags ?? []) !== JSON.stringify(dietaryTags) ||
+      (booking.guestId ?? null) !== (linkedGuest?.id ?? null) ||
+      createGuestProfile
     );
-  }, [booking, draft, dietaryTags]);
+  }, [booking, draft, dietaryTags, linkedGuest, createGuestProfile]);
 
   async function saveChanges(propagateGuestType?: boolean): Promise<boolean> {
     if (!draft) return true;
@@ -254,6 +270,20 @@ export default function BookingDetailPage() {
         guestCategoryId: draft.guestCategoryId || null,
         propagateGuestType: propagateGuestType === true,
         dietariesTags: dietaryTags.length > 0 ? dietaryTags : null,
+        // Linked: re-sync the guest's master record with whatever's
+        // currently in the form on EVERY save, not just when the link
+        // itself changes — that's the whole point (see resolveGuestLink).
+        // Not linked but flagged to create one: send that instead. Neither,
+        // but this booking WAS linked when it loaded: an explicit Unlink.
+        // Neither, and it never was: omit guestId entirely so the PATCH
+        // route doesn't touch it or the guests table at all.
+        ...(linkedGuest
+          ? { guestId: linkedGuest.id }
+          : createGuestProfile
+            ? { createGuestProfile: true }
+            : booking?.guestId != null
+              ? { guestId: null }
+              : {}),
       }),
     });
 
@@ -494,6 +524,21 @@ export default function BookingDetailPage() {
               placeholder="Optional — shown on the grid"
             />
           </Field>
+        </div>
+
+        <div style={{ marginBottom: 10 }}>
+          <GuestProfilePicker
+            linkedGuest={linkedGuest}
+            createNew={createGuestProfile}
+            onSelect={(g) => {
+              setLinkedGuest(g);
+              setCreateGuestProfile(false);
+              setDraft({ ...draft, firstName: g.firstName, lastName: g.lastName, preferredName: g.preferredName ?? "" });
+              setDietaryTags(Array.isArray(g.dietariesTags) ? (g.dietariesTags as string[]) : []);
+            }}
+            onUnlink={() => setLinkedGuest(null)}
+            onToggleCreateNew={setCreateGuestProfile}
+          />
         </div>
 
         <div className="tr-inline-grid-3">

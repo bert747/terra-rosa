@@ -8,6 +8,7 @@ import { nextTimelineEventDate } from "@/lib/next-timeline-event";
 import { logChange } from "@/lib/change-log";
 import { desc } from "drizzle-orm";
 import { formatDateUk } from "@/lib/dates";
+import { resolveGuestLink } from "@/lib/guests";
 
 export const dynamic = "force-dynamic";
 
@@ -64,10 +65,14 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  // See resolveGuestLink's own doc comment — links to/creates a reusable
+  // guest profile only when the form actually asked for it.
+  const guestId = await resolveGuestLink(body, { firstName, lastName, preferredName, dietariesTags });
+
   const booking = await db.transaction(async (tx) => {
     const [row] = await tx
       .insert(bookings)
-      .values({ guestName, firstName, lastName, preferredName, notes, arrivalDate, departureDate, linkedBookingId, bedId, dietariesTags, guestCategoryId })
+      .values({ guestName, firstName, lastName, preferredName, notes, arrivalDate, departureDate, linkedBookingId, bedId, dietariesTags, guestCategoryId, guestId: guestId ?? null })
       .returning();
 
     if (bedId != null && partnerBedId != null) {

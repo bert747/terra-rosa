@@ -209,6 +209,25 @@ export const bedSoloPeriods = pgTable("bed_solo_periods", {
 // grid pill/booking-edit-page "jump to the other part" arrows and "Merge"
 // find every sibling with one query (`WHERE split_group_id = X`) instead of
 // guessing from guest name + adjacent dates.
+// A reusable guest profile — lets a returning guest's dietary info (the
+// main motivating case, see guests.dietariesTags) get pulled onto a NEW
+// booking instead of re-typing it, and stay current: editing dietary on any
+// booking linked to a guest updates this row, which every OTHER booking
+// linked to the same guest then reads through bookings.guestId (see that
+// column's own comment for the "kept in sync onto the booking row too"
+// mechanics). Deliberately opt-in, not automatic — existing bookings are
+// never retroactively matched into a guest profile; staff link one
+// explicitly (search-existing or "save as a new profile") from the booking
+// form when they actually want to.
+export const guests = pgTable("guests", {
+  id: serial("id").primaryKey(),
+  firstName: text("first_name").notNull(),
+  lastName: text("last_name").notNull(),
+  preferredName: text("preferred_name"),
+  dietariesTags: jsonb("dietaries_tags"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
 export const bookings = pgTable("bookings", {
   id: serial("id").primaryKey(),
   // The record of truth everywhere EXCEPT the grid pill and the booking
@@ -231,6 +250,14 @@ export const bookings = pgTable("bookings", {
   splitGroupId: integer("split_group_id").references((): AnyPgColumn => bookings.id, { onDelete: "set null" }),
   bedId: integer("bed_id").references(() => beds.id, { onDelete: "set null" }),
   dietariesTags: jsonb("dietaries_tags"),
+  // Which reusable guest profile (if any) this booking is linked to — see
+  // guests' own comment. Null for the vast majority of bookings (nothing
+  // retroactive, nothing forced); when set, the booking API keeps this
+  // row's own firstName/lastName/preferredName/dietariesTags mirroring the
+  // guest's, so every existing reader of THOSE columns (grid pill, bookings
+  // list, exports, …) keeps working unchanged — the linkage only changes
+  // what happens when the booking form is next saved.
+  guestId: integer("guest_id").references(() => guests.id, { onDelete: "set null" }),
   // Nullable on purpose — a future bulk-imported booking may arrive with no
   // known guest type at all, needing manual assignment afterward rather
   // than being forced into a fake default. See guestCategories above.

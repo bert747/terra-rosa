@@ -8,6 +8,7 @@ import { checkHouseCapacity } from "@/lib/house-capacity";
 import { findAllocationIssues } from "@/lib/allocation-issues";
 import { logChange } from "@/lib/change-log";
 import { formatDateUk } from "@/lib/dates";
+import { resolveGuestLink } from "@/lib/guests";
 
 export const dynamic = "force-dynamic";
 
@@ -88,6 +89,23 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   const finalArrival = updates.arrivalDate !== undefined ? updates.arrivalDate : existing.arrivalDate;
   const finalDeparture = updates.departureDate !== undefined ? updates.departureDate : existing.departureDate;
 
+  // Same "final effective value" pattern as bed/dates above — a PATCH that
+  // only sends dietariesTags (the common case: editing dietary on an
+  // already-linked booking) still needs the guest's CURRENT name to write
+  // a correct, complete row, not blank/stale fields.
+  if (body.guestId !== undefined || body.createGuestProfile === true) {
+    const finalPreferredName = updates.preferredName !== undefined ? updates.preferredName : existing.preferredName;
+    const finalDietariesTags = updates.dietariesTags !== undefined ? updates.dietariesTags : existing.dietariesTags;
+    const finalFirstName = updates.firstName !== undefined ? updates.firstName : existing.firstName;
+    const finalLastName = updates.lastName !== undefined ? updates.lastName : existing.lastName;
+    updates.guestId = await resolveGuestLink(body, {
+      firstName: finalFirstName,
+      lastName: finalLastName,
+      preferredName: finalPreferredName,
+      dietariesTags: finalDietariesTags,
+    });
+  }
+
   if (finalDeparture <= finalArrival) {
     return NextResponse.json({ error: "Departure date must be after arrival date" }, { status: 400 });
   }
@@ -128,6 +146,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     if (updates.preferredName !== undefined) siblingUpdates.preferredName = updates.preferredName;
     if (updates.notes !== undefined) siblingUpdates.notes = updates.notes;
     if (updates.dietariesTags !== undefined) siblingUpdates.dietariesTags = updates.dietariesTags;
+    if (updates.guestId !== undefined) siblingUpdates.guestId = updates.guestId;
     if (updates.guestCategoryId !== undefined && body.propagateGuestType === true) siblingUpdates.guestCategoryId = updates.guestCategoryId;
 
     if (Object.keys(siblingUpdates).length > 0) {
@@ -146,6 +165,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   if (updates.dietariesTags !== undefined) changedParts.push("dietary tags");
   if (updates.notes !== undefined) changedParts.push("notes");
   if (updates.linkedBookingId !== undefined || updates.sharesBedWithBookingId !== undefined) changedParts.push("sharing/linking");
+  if (updates.guestId !== undefined) changedParts.push("guest profile link");
   if (changedParts.length > 0) {
     await logChange({
       category: "bookings",

@@ -10,6 +10,7 @@ import ConfirmModal, { type ConfirmModalState } from "@/components/ConfirmModal"
 import { useDietaryTagSuggestions } from "@/lib/use-dietary-tag-suggestions";
 import { useGuestCategories } from "@/lib/use-guest-categories";
 import GuestTypeSelect from "@/components/GuestTypeSelect";
+import GuestProfilePicker, { type GuestProfile } from "@/components/GuestProfilePicker";
 
 interface BedOption {
   id: number;
@@ -84,6 +85,8 @@ function NewBookingForm() {
     guestCategoryId: "" as string,
   });
   const [dietaryTags, setDietaryTags] = useState<string[]>([]);
+  const [linkedGuest, setLinkedGuest] = useState<GuestProfile | null>(null);
+  const [createGuestProfile, setCreateGuestProfile] = useState(false);
   const dietarySuggestions = useDietaryTagSuggestions();
   const guestCategories = useGuestCategories().filter((c) => c.active);
   // Live preview of the selected guest type's colour — see the identical
@@ -181,6 +184,7 @@ function NewBookingForm() {
         partnerBedId: form.partnerBedId || null,
         guestCategoryId: form.guestCategoryId || null,
         dietariesTags: dietaryTags.length > 0 ? dietaryTags : null,
+        ...(linkedGuest ? { guestId: linkedGuest.id } : createGuestProfile ? { createGuestProfile: true } : {}),
       }),
     });
 
@@ -261,6 +265,21 @@ function NewBookingForm() {
               placeholder="Optional — shown on the grid"
             />
           </Field>
+        </div>
+
+        <div style={{ marginBottom: 10 }}>
+          <GuestProfilePicker
+            linkedGuest={linkedGuest}
+            createNew={createGuestProfile}
+            onSelect={(g) => {
+              setLinkedGuest(g);
+              setCreateGuestProfile(false);
+              setForm({ ...form, firstName: g.firstName, lastName: g.lastName, preferredName: g.preferredName ?? "" });
+              setDietaryTags(Array.isArray(g.dietariesTags) ? (g.dietariesTags as string[]) : []);
+            }}
+            onUnlink={() => setLinkedGuest(null)}
+            onToggleCreateNew={setCreateGuestProfile}
+          />
         </div>
 
         <div className="tr-inline-grid-3">
