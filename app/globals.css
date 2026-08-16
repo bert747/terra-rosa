@@ -2354,6 +2354,26 @@ button:hover {
   th {
     position: static;
   }
+
+  /* The meal table's th/td carry inline min-width (90px for the Meal
+     column, 150px per day column — see app/daily-sheet/page.tsx) so it
+     reads well on screen, but 8 columns of that comfortably exceeds a
+     printed page's width, forcing an overflow scrollbar that just clips
+     the last day(s) off the page. table-layout:fixed + min-width:0
+     (inline styles need !important to lose) lets the columns shrink and
+     share the page's actual width instead. */
+  .tr-meals-section table {
+    table-layout: fixed;
+  }
+
+  .tr-meals-section th,
+  .tr-meals-section td {
+    min-width: 0 !important;
+  }
+
+  .tr-meals-section .tr-card {
+    overflow: visible;
+  }
 }
 
 /* -------------------------------------------------------------------------
