@@ -316,7 +316,6 @@ export default function DailySheetPage() {
               {weekDates.map((d) => (
                 <th
                   key={d}
-                  className="tr-no-print"
                   onClick={() => setDate(d)}
                   data-tooltip="Show this day in Housekeeping below"
                   style={{ minWidth: 150, cursor: "pointer", background: d === date ? "var(--tr-accent-soft)" : undefined }}
