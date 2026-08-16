@@ -59,6 +59,7 @@ interface OngoingEvent {
 interface HousekeepingSheet {
   moverTasks: string[];
   arrivals: ArrivalEntry[];
+  roomMoves: ArrivalEntry[];
   departures: DepartureEntry[];
   eventsOngoing: OngoingEvent[];
   roomsToMake: RoomBedCount[];
@@ -67,6 +68,7 @@ interface HousekeepingSheet {
 const EMPTY_SHEET: HousekeepingSheet = {
   moverTasks: [],
   arrivals: [],
+  roomMoves: [],
   departures: [],
   eventsOngoing: [],
   roomsToMake: [],
@@ -482,6 +484,19 @@ export default function DailySheetPage() {
               <ul style={{ margin: 0, paddingLeft: 18 }}>
                 {sheet.arrivals.map((a, i) => (
                   <li key={i}>{a.guestName} ({a.roomName})</li>
+                ))}
+              </ul>
+            )}
+          </Section>
+
+          <Section>
+            <h3 className="tr-section-title" style={{ marginBottom: 8 }}>Room moves</h3>
+            {sheet.roomMoves.length === 0 ? (
+              <p className="tr-muted">No room moves today.</p>
+            ) : (
+              <ul style={{ margin: 0, paddingLeft: 18 }}>
+                {sheet.roomMoves.map((a, i) => (
+                  <li key={i}>{a.guestName} → {a.roomName}</li>
                 ))}
               </ul>
             )}

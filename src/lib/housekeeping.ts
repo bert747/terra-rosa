@@ -37,6 +37,14 @@ export interface HousekeepingSheet {
   /** "Move 2 Singles from Ensuite 1 to Ashrami" — already netted, so a bed swapping back and forth for no real physical change never appears. */
   moverTasks: string[];
   arrivals: ArrivalEntry[];
+  /**
+   * Arrivals that are really a split booking's continuation into a new room
+   * (see bookings.splitGroupId) — the guest didn't leave and come back, so
+   * listing them as ordinary arrivals overstates who's actually checking in
+   * today. Kept separate rather than filtered out because housekeeping still
+   * needs to know the new bed is occupied (see roomsToMake).
+   */
+  roomMoves: ArrivalEntry[];
   departures: DepartureEntry[];
   eventsOngoing: OngoingEvent[];
   /** Only rooms with at least one arrival today — see buildHousekeepingSheet. */
@@ -288,16 +296,25 @@ export async function buildHousekeepingSheet(date: ISODate): Promise<Housekeepin
   // physical bed made up — without this, each arrival independently folds
   // to "Double" and the pair gets counted twice ("2 of 1", nonsensical).
   const countedDoublePairs = new Set<string>();
-  // Single pass over arrivingToday covers both the Arrivals list and the
-  // "made" fold below — both need the same per-booking roomId, previously
-  // resolved via two separate loops each re-deriving it.
+  // A departing booking today whose split lineage root reappears on an
+  // arriving booking today means that arrival is the same stay picking up in
+  // a new bed, not a fresh check-in — see guestsForMeal's identical
+  // boundary-date logic in kitchen.ts.
+  const departingSplitRoots = new Set(departingToday.map((b) => b.splitGroupId ?? b.id));
+
+  // Single pass over arrivingToday covers both the Arrivals/Room moves lists
+  // and the "made" fold below — both need the same per-booking roomId,
+  // previously resolved via two separate loops each re-deriving it.
   const arrivals: ArrivalEntry[] = [];
+  const roomMoves: ArrivalEntry[] = [];
   for (const b of arrivingToday) {
     const roomId = b.bedId != null ? currentRoomIdFor(b.bedId, date, allBedLocations) : null;
-    arrivals.push({
+    const entry: ArrivalEntry = {
       guestName: b.guestName,
       roomName: roomId != null ? roomNameById.get(roomId) ?? "Unassigned" : "Unassigned",
-    });
+    };
+    const isRoomMove = departingSplitRoots.has(b.splitGroupId ?? b.id);
+    (isRoomMove ? roomMoves : arrivals).push(entry);
 
     if (roomId == null) continue;
     const bedType = housekeepingBedType(b.bedId);
@@ -314,6 +331,7 @@ export async function buildHousekeepingSheet(date: ISODate): Promise<Housekeepin
     addMade(roomId, bedType);
   }
   arrivals.sort((a, b) => a.roomName.localeCompare(b.roomName) || a.guestName.localeCompare(b.guestName));
+  roomMoves.sort((a, b) => a.roomName.localeCompare(b.roomName) || a.guestName.localeCompare(b.guestName));
 
   for (const j of joinsStartingTodayValid) {
     if (j.mode !== "double") continue;
@@ -347,6 +365,7 @@ export async function buildHousekeepingSheet(date: ISODate): Promise<Housekeepin
   return {
     moverTasks,
     arrivals,
+    roomMoves,
     departures,
     eventsOngoing: eventsOngoingToday.map((e) => ({
       name: e.name,
