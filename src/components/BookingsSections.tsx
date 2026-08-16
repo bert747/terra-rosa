@@ -231,83 +231,82 @@ export default function BookingsSections({
 
   return (
     <>
-      {/* Deliberately nowrap + its own horizontal scroll, not flexWrap —
-          title, guest-type legend, search box and the button cluster all
-          used to sit on one row; adding the search box pushed it over the
-          edge into wrapping onto two on some widths, which read as broken.
-          A narrow window now scrolls this one strip sideways instead. */}
-      <div style={{ display: "flex", alignItems: "center", marginBottom: 12, flexWrap: "nowrap", overflowX: "auto", paddingBottom: 2 }}>
-        <h1 style={{ fontSize: 18, margin: 0, flex: "none", whiteSpace: "nowrap" }}>{pageTitle}</h1>
-        {guestCategories.length > 0 && (
-          <div style={{ display: "flex", flexWrap: "nowrap", alignItems: "center", gap: 6, marginLeft: 16, flex: "none" }}>
-            <span className="tr-muted" style={{ fontSize: 12, whiteSpace: "nowrap" }}>Guest type:</span>
-            {guestCategories.map((c) => (
-              <span key={c.id} className="tr-grid-booking-pill" style={{ position: "static", flex: "none", whiteSpace: "nowrap", ...pillColourVars(c.colour) }}>
-                {c.name}
-              </span>
-            ))}
-          </div>
-        )}
-        <span style={{ flex: 1, flexShrink: 1 }} />
-        <input
-          type="search"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search first name, surname or preferred name…"
-          aria-label="Search bookings"
-          style={{ minWidth: 240, flexShrink: 0 }}
-        />
-        <div style={{ marginRight: 8, flexShrink: 0 }}>
-          <AlertsButton onChanged={() => router.refresh()} />
-        </div>
-        <a href="/bookings/new" style={{ flexShrink: 0 }}><button className="primary">New booking</button></a>
-        <div style={{ position: "relative", marginLeft: 8, flexShrink: 0 }}>
-          <button type="button" className="tr-columns-trigger" onClick={() => setColumnsMenuOpen((v) => !v)}>
-            <span aria-hidden="true" className="tr-columns-trigger-icon">☰</span>
-            Columns
-          </button>
-          {columnsMenuOpen && (
-            <>
-              <div
-                style={{ position: "fixed", inset: 0, zIndex: 29 }}
-                onClick={() => setColumnsMenuOpen(false)}
-              />
-              <div className="tr-columns-menu" style={{ position: "absolute", top: "calc(100% + 6px)", right: 0, zIndex: 30 }}>
-                <div className="tr-columns-menu-title">Show columns</div>
-                {columns.map((col) => {
-                  const locked = col.key === "guestName";
-                  const checked = !hiddenKeys.has(col.key);
-                  return (
-                    <label key={col.key} className={locked ? "tr-columns-menu-item tr-columns-menu-item-locked" : "tr-columns-menu-item"}>
-                      <span className={checked ? "tr-checkbox tr-checkbox-checked" : "tr-checkbox"} aria-hidden="true">
-                        {checked && "✓"}
-                      </span>
-                      <input
-                        type="checkbox"
-                        checked={checked}
-                        disabled={locked}
-                        onChange={() => toggleVisible(col.key)}
-                      />
-                      {col.label}
-                      {locked && <span className="tr-columns-menu-hint">always shown</span>}
-                    </label>
-                  );
-                })}
-                <div className="tr-columns-menu-title">Grouping</div>
-                <label className="tr-columns-menu-item">
-                  <span className={splitByArrival ? "tr-checkbox tr-checkbox-checked" : "tr-checkbox"} aria-hidden="true">
-                    {splitByArrival && "✓"}
-                  </span>
-                  <input
-                    type="checkbox"
-                    checked={splitByArrival}
-                    onChange={(e) => updateSplitByArrival(e.target.checked)}
-                  />
-                  Split arriving this week from other bookings
-                </label>
-              </div>
-            </>
+      {/* Never overflows the page width: the outer row wraps, so the
+          search+buttons cluster drops to its own line under the title
+          when there isn't room, instead of scrolling or spilling out. */}
+      <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", marginBottom: 12, rowGap: 8, columnGap: 8 }}>
+        <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", rowGap: 6, columnGap: 16, flex: "1 1 auto", minWidth: 0 }}>
+          <h1 style={{ fontSize: 18, margin: 0, flex: "none", whiteSpace: "nowrap" }}>{pageTitle}</h1>
+          {guestCategories.length > 0 && (
+            <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", rowGap: 6, columnGap: 6, flex: "none" }}>
+              <span className="tr-muted" style={{ fontSize: 12, whiteSpace: "nowrap" }}>Guest type:</span>
+              {guestCategories.map((c) => (
+                <span key={c.id} className="tr-grid-booking-pill" style={{ position: "static", flex: "none", whiteSpace: "nowrap", ...pillColourVars(c.colour) }}>
+                  {c.name}
+                </span>
+              ))}
+            </div>
           )}
+        </div>
+        <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8, marginLeft: "auto" }}>
+          <input
+            type="search"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search first name, surname or preferred name…"
+            aria-label="Search bookings"
+            style={{ flex: "1 1 160px", minWidth: 0, maxWidth: 240 }}
+          />
+          <AlertsButton onChanged={() => router.refresh()} />
+          <a href="/bookings/new" style={{ flexShrink: 0 }}><button className="primary">New booking</button></a>
+          <div style={{ position: "relative", flexShrink: 0 }}>
+            <button type="button" className="tr-columns-trigger" onClick={() => setColumnsMenuOpen((v) => !v)}>
+              <span aria-hidden="true" className="tr-columns-trigger-icon">☰</span>
+              Columns
+            </button>
+            {columnsMenuOpen && (
+              <>
+                <div
+                  style={{ position: "fixed", inset: 0, zIndex: 29 }}
+                  onClick={() => setColumnsMenuOpen(false)}
+                />
+                <div className="tr-columns-menu" style={{ position: "absolute", top: "calc(100% + 6px)", right: 0, zIndex: 30 }}>
+                  <div className="tr-columns-menu-title">Show columns</div>
+                  {columns.map((col) => {
+                    const locked = col.key === "guestName";
+                    const checked = !hiddenKeys.has(col.key);
+                    return (
+                      <label key={col.key} className={locked ? "tr-columns-menu-item tr-columns-menu-item-locked" : "tr-columns-menu-item"}>
+                        <span className={checked ? "tr-checkbox tr-checkbox-checked" : "tr-checkbox"} aria-hidden="true">
+                          {checked && "✓"}
+                        </span>
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          disabled={locked}
+                          onChange={() => toggleVisible(col.key)}
+                        />
+                        {col.label}
+                        {locked && <span className="tr-columns-menu-hint">always shown</span>}
+                      </label>
+                    );
+                  })}
+                  <div className="tr-columns-menu-title">Grouping</div>
+                  <label className="tr-columns-menu-item">
+                    <span className={splitByArrival ? "tr-checkbox tr-checkbox-checked" : "tr-checkbox"} aria-hidden="true">
+                      {splitByArrival && "✓"}
+                    </span>
+                    <input
+                      type="checkbox"
+                      checked={splitByArrival}
+                      onChange={(e) => updateSplitByArrival(e.target.checked)}
+                    />
+                    Split arriving this week from other bookings
+                  </label>
+                </div>
+              </>
+            )}
+          </div>
         </div>
       </div>
 
