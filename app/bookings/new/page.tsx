@@ -276,15 +276,12 @@ function NewBookingForm() {
         <div style={{ marginBottom: 10 }}>
           <GuestProfilePicker
             linkedGuest={linkedGuest}
-            createNew={false}
-            showCreateCheckbox={false}
             onSelect={(g) => {
               setLinkedGuest(g);
               setForm({ ...form, firstName: g.firstName, lastName: g.lastName, preferredName: g.preferredName ?? "" });
               setDietaryTags(Array.isArray(g.dietariesTags) ? (g.dietariesTags as string[]) : []);
             }}
             onUnlink={() => setLinkedGuest(null)}
-            onToggleCreateNew={() => {}}
           />
         </div>
 

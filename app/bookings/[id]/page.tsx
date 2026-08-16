@@ -513,7 +513,6 @@ export default function BookingDetailPage() {
         <div style={{ marginBottom: 10 }}>
           <GuestProfilePicker
             linkedGuest={linkedGuest}
-            createNew={createGuestProfile}
             onSelect={(g) => {
               setLinkedGuest(g);
               setCreateGuestProfile(false);
@@ -521,7 +520,6 @@ export default function BookingDetailPage() {
               setDietaryTags(Array.isArray(g.dietariesTags) ? (g.dietariesTags as string[]) : []);
             }}
             onUnlink={() => setLinkedGuest(null)}
-            onToggleCreateNew={setCreateGuestProfile}
           />
         </div>
 
@@ -540,6 +538,21 @@ export default function BookingDetailPage() {
             />
           </Field>
         </div>
+
+        {!linkedGuest && (
+          <label
+            style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, marginTop: -14, marginBottom: 10, whiteSpace: "nowrap" }}
+            className="tr-muted"
+          >
+            <input
+              type="checkbox"
+              checked={createGuestProfile}
+              onChange={(e) => setCreateGuestProfile(e.target.checked)}
+              style={{ width: 13, height: 13 }}
+            />
+            Save this guest&apos;s info to a reusable profile (so it can be pulled onto their next booking)
+          </label>
+        )}
 
         <div className="tr-inline-grid-3">
           <Field label="Arrival date">
