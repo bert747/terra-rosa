@@ -116,7 +116,8 @@ textarea {
    Plain, unstyled checkboxes (e.g. History's category filter) would
    otherwise render in the browser's default blue, which reads as a
    different, unthemed control next to everything else on the page. */
-input[type="checkbox"] {
+input[type="checkbox"],
+input[type="radio"] {
   accent-color: var(--tr-accent);
 }
 

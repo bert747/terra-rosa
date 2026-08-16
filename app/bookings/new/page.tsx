@@ -132,6 +132,10 @@ function NewBookingForm() {
       setError("First name is required.");
       return;
     }
+    if (!form.lastName.trim()) {
+      setError("Last name is required.");
+      return;
+    }
     if (!form.arrivalDate || !form.departureDate || form.departureDate <= form.arrivalDate) {
       setError("Valid arrival/departure dates are required.");
       return;
@@ -255,8 +259,12 @@ function NewBookingForm() {
               onChange={(e) => setForm({ ...form, firstName: e.target.value })}
             />
           </Field>
-          <Field label="Last name">
-            <input value={form.lastName} onChange={(e) => setForm({ ...form, lastName: e.target.value })} />
+          <Field label="Last name" required>
+            <input
+              required
+              value={form.lastName}
+              onChange={(e) => setForm({ ...form, lastName: e.target.value })}
+            />
           </Field>
           <Field label="Preferred name">
             <input

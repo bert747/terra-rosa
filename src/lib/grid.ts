@@ -47,6 +47,8 @@ export interface GridBooking {
   id: number;
   guestName: string;
   firstName: string;
+  /** Used only by the pill's "First + initial"/"First + full surname" display modes (see pillDisplayName in GridCanvas.tsx) — the plain "First name" mode never touches it. */
+  lastName: string;
   /** Short/preferred form of firstName — see the schema column's own doc comment. Pill display prefers this, falling back to firstName. */
   preferredName?: string | null;
   /** Free-text staff note — see the schema column's own doc comment. Surfaced as a small folded-corner marker on the pill, not shown inline. */

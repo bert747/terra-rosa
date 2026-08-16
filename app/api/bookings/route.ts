@@ -42,6 +42,10 @@ export async function POST(req: NextRequest) {
   const partnerBedId = body.partnerBedId ? Number(body.partnerBedId) : null;
 
   if (!firstName) return NextResponse.json({ error: "First name is required" }, { status: 400 });
+  // Required for every NEW booking from here on — existing bookings created
+  // before this that have a blank last name are left exactly as they are
+  // (this only guards creation, not editing one of those older rows).
+  if (!lastName) return NextResponse.json({ error: "Last name is required" }, { status: 400 });
   if (!arrivalDate) return NextResponse.json({ error: "Arrival date is required" }, { status: 400 });
   if (!departureDate) return NextResponse.json({ error: "Departure date is required" }, { status: 400 });
   if (departureDate <= arrivalDate) {

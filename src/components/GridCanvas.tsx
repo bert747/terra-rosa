@@ -210,16 +210,26 @@ function plannedChangeConfigDescription(lines: PlannedChangeLine[]): string {
   return "the Couple Double";
 }
 
+/** Per-browser display preference (gear icon menu) — how much of a booking's name its pill shows. */
+type PillNameMode = "first" | "firstInitial" | "firstLast";
+
 /**
  * What a booking's pill actually shows: its own preferredName if staff set
  * one (a short/preferred form — see the schema column's own doc comment),
- * else just the first word of guestName. guestName itself is untouched
- * everywhere else (bookings list, exports, the daily sheet, the title
- * tooltip on this very pill) — this is purely about fitting a name into a
- * pill that's often narrower than someone's full name.
+ * else its firstName — that's the whole of the "First name" mode. The other
+ * two modes append the last name's initial or the whole last name onto
+ * that same base, e.g. "Luca" / "Luca I" / "Luca Ilari". guestName itself
+ * is untouched everywhere else (bookings list, exports, the daily sheet,
+ * the title tooltip on this very pill) — this is purely about fitting a
+ * name into a pill that's often narrower than someone's full name.
  */
-function pillDisplayName(booking: GridBooking): string {
-  return booking.preferredName || booking.firstName;
+function pillDisplayName(booking: GridBooking, mode: PillNameMode): string {
+  const base = booking.preferredName || booking.firstName;
+  const lastName = booking.lastName?.trim();
+  if (!lastName) return base;
+  if (mode === "firstInitial") return `${base} ${lastName[0]}`;
+  if (mode === "firstLast") return `${base} ${lastName}`;
+  return base;
 }
 
 /**
@@ -414,11 +424,15 @@ function GridSettingsMenu({
   onShowSharesWithTextChange,
   showHoverDetails,
   onShowHoverDetailsChange,
+  pillNameMode,
+  onPillNameModeChange,
 }: {
   showSharesWithText: boolean;
   onShowSharesWithTextChange: (value: boolean) => void;
   showHoverDetails: boolean;
   onShowHoverDetailsChange: (value: boolean) => void;
+  pillNameMode: PillNameMode;
+  onPillNameModeChange: (value: PillNameMode) => void;
 }) {
   const [settingsMenuOpen, setSettingsMenuOpen] = useState(false);
   // Measured so the "booking details when hovering" preview's mock tooltip
@@ -554,6 +568,33 @@ function GridSettingsMenu({
                 </span>
               </div>
             </label>
+            <div className="tr-settings-toggle-row" style={{ flexDirection: "column", alignItems: "stretch", gap: 6 }}>
+              <span className="tr-settings-toggle-label" style={{ display: "block" }}>
+                <div style={{ fontWeight: 600 }}>Guest name shown on pill</div>
+                <div className="tr-muted" style={{ fontSize: 11, marginTop: 2 }}>
+                  How much of the name fits before it gets crowded — most stays are only a few days, so First name alone is usually enough room.
+                </div>
+              </span>
+              {(
+                [
+                  { value: "first", label: "First name", example: "Luca" },
+                  { value: "firstInitial", label: "First name + initial", example: "Luca I" },
+                  { value: "firstLast", label: "First name + full surname", example: "Luca Ilari" },
+                ] as const
+              ).map((opt) => (
+                <label key={opt.value} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer" }}>
+                  <input
+                    type="radio"
+                    name="pillNameMode"
+                    className="tr-settings-checkbox"
+                    checked={pillNameMode === opt.value}
+                    onChange={() => onPillNameModeChange(opt.value)}
+                  />
+                  {opt.label}
+                  <span className="tr-muted" style={{ fontSize: 11 }}>({opt.example})</span>
+                </label>
+              ))}
+            </div>
           </div>
         </>
       )}
@@ -1027,6 +1068,9 @@ export default function GridCanvas({ initialData, today }: { initialData: GridDa
   // default (matches the long-standing behaviour), but some staff find it
   // noisy once they already know the grid well.
   const [showHoverDetails, setShowHoverDetails] = useState(true);
+  // How much of a booking's name its pill shows — see pillDisplayName's own
+  // doc comment for the three modes.
+  const [pillNameMode, setPillNameMode] = useState<PillNameMode>("first");
   useEffect(() => {
     const stored = localStorage.getItem("tr-grid-settings");
     if (!stored) return;
@@ -1034,22 +1078,29 @@ export default function GridCanvas({ initialData, today }: { initialData: GridDa
       const parsed = JSON.parse(stored);
       if (typeof parsed.showSharesWithText === "boolean") setShowSharesWithText(parsed.showSharesWithText);
       if (typeof parsed.showHoverDetails === "boolean") setShowHoverDetails(parsed.showHoverDetails);
+      if (parsed.pillNameMode === "first" || parsed.pillNameMode === "firstInitial" || parsed.pillNameMode === "firstLast") {
+        setPillNameMode(parsed.pillNameMode);
+      }
     } catch {
       // Corrupt/foreign value — ignore, keep the default.
     }
   }, []);
-  // Both setters merge into the same stored object (reading the CURRENT
+  // Every setter merges into the same stored object (reading the CURRENT
   // state values, not just the one being changed) rather than each
-  // overwriting the whole "tr-grid-settings" key — otherwise toggling one
-  // setting would silently reset the other back to its default the next
-  // time this loads.
+  // overwriting the whole "tr-grid-settings" key — otherwise changing one
+  // setting would silently reset the others back to default the next time
+  // this loads.
   function updateShowSharesWithText(value: boolean) {
     setShowSharesWithText(value);
-    localStorage.setItem("tr-grid-settings", JSON.stringify({ showSharesWithText: value, showHoverDetails }));
+    localStorage.setItem("tr-grid-settings", JSON.stringify({ showSharesWithText: value, showHoverDetails, pillNameMode }));
   }
   function updateShowHoverDetails(value: boolean) {
     setShowHoverDetails(value);
-    localStorage.setItem("tr-grid-settings", JSON.stringify({ showSharesWithText, showHoverDetails: value }));
+    localStorage.setItem("tr-grid-settings", JSON.stringify({ showSharesWithText, showHoverDetails: value, pillNameMode }));
+  }
+  function updatePillNameMode(value: PillNameMode) {
+    setPillNameMode(value);
+    localStorage.setItem("tr-grid-settings", JSON.stringify({ showSharesWithText, showHoverDetails, pillNameMode: value }));
   }
   const [cancellingMoveId, setCancellingMoveId] = useState<string | "all" | null>(null);
   const [fixOpenGroupId, setFixOpenGroupId] = useState<number | null>(null);
@@ -2111,13 +2162,14 @@ export default function GridCanvas({ initialData, today }: { initialData: GridDa
       mergeSplitBooking,
       showSharesWithText,
       showHoverDetails,
+      pillNameMode,
       bedInfoById,
       jumpToSibling,
       viewportRef,
       stickyLabelWidth: labelColWidths.room + labelColWidths.bed,
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [data.start, data.days, data.dormStorageRoomId, today, router, panning, roomCellStyle, bedCellStyle, data.splitGroups, showSharesWithText, showHoverDetails, bedInfoById, labelColWidths.room, labelColWidths.bed]
+    [data.start, data.days, data.dormStorageRoomId, today, router, panning, roomCellStyle, bedCellStyle, data.splitGroups, showSharesWithText, showHoverDetails, pillNameMode, bedInfoById, labelColWidths.room, labelColWidths.bed]
   );
 
   // --- Visible-column geometry, shared by every row -------------------------
@@ -2327,6 +2379,8 @@ export default function GridCanvas({ initialData, today }: { initialData: GridDa
           onShowSharesWithTextChange={updateShowSharesWithText}
           showHoverDetails={showHoverDetails}
           onShowHoverDetailsChange={updateShowHoverDetails}
+          pillNameMode={pillNameMode}
+          onPillNameModeChange={updatePillNameMode}
         />
         <span style={{ flex: 1 }} />
         <a href="/bookings/new?from=grid"><button type="button" className="primary">+ New booking</button></a>
@@ -2747,6 +2801,8 @@ interface GridActions {
   showSharesWithText: boolean;
   /** Per-browser display preference (gear icon menu) — whether hovering a booking pill shows the "GuestName - arrival to departure" detail tooltip. */
   showHoverDetails: boolean;
+  /** Per-browser display preference (gear icon menu) — how much of a booking's name its pill shows. See pillDisplayName's own doc comment. */
+  pillNameMode: PillNameMode;
   /** bedId -> its current room/type label, for the split-sibling nav chevrons' hover preview. */
   bedInfoById: Map<number, { bedLabel: string; roomName: string }>;
   /** Jumps to the other part of a split booking's date AND row, flashing it once it's in view — see the component's own jumpToSibling. */
@@ -4668,7 +4724,7 @@ function renderBookingPill(run: CellSpec[], actions: GridActions) {
             📝
           </span>
         )}
-        <span className="tr-grid-pill-name">{pillDisplayName(booking)}</span>
+        <span className="tr-grid-pill-name">{pillDisplayName(booking, actions.pillNameMode)}</span>
         {booking.relationship && actions.showSharesWithText && (
           <span className="tr-grid-pill-relation">
             ({booking.relationship.kind === "bed" ? "same bed as" : "same room as"} <strong>{booking.relationship.otherGuestName}</strong>)

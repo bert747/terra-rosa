@@ -204,6 +204,7 @@ export async function loadGridData(start: ISODate, days: number): Promise<GridDa
       id: bookings.id,
       guestName: bookings.guestName,
       firstName: bookings.firstName,
+      lastName: bookings.lastName,
       preferredName: bookings.preferredName,
       notes: bookings.notes,
       arrivalDate: bookings.arrivalDate,
