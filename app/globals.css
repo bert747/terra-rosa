@@ -2344,6 +2344,16 @@ button:hover {
     border: none;
     box-shadow: none;
   }
+
+  /* Chromium print bug: a `position: sticky` header (see the base `th`
+     rule above) drops its border when rendered to print/PDF, because it's
+     promoted to its own compositing layer that paints outside the table's
+     normal border-collapse pass. Sticky is only for on-screen scrolling —
+     there's nothing to scroll on a paginated printout — so just turn it
+     off for print and get the border back. */
+  th {
+    position: static;
+  }
 }
 
 /* -------------------------------------------------------------------------
