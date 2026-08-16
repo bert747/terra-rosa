@@ -177,8 +177,16 @@ function PrintExportButton() {
   function printScoped(scope: "meals" | "housekeeping" | "both") {
     setMenuOpen(false);
     document.body.dataset.printScope = scope;
+    // The browser's print header/footer uses document.title (as "Terra
+    // Rosa — Room Management" — see app/layout.tsx) — swap it for
+    // whichever section is actually being printed, then restore the real
+    // title once printing's done.
+    const originalTitle = document.title;
+    if (scope === "meals") document.title = "Meals";
+    else if (scope === "housekeeping") document.title = "Housekeeping";
     function reset() {
       delete document.body.dataset.printScope;
+      document.title = originalTitle;
       window.removeEventListener("afterprint", reset);
       // Chromium quirk: printing a table with table-layout:auto (see
       // .tr-table) recomputes its column widths for the print pass, and
