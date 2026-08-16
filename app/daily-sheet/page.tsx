@@ -335,9 +335,15 @@ export default function DailySheetPage() {
                     <td key={d} style={{ verticalAlign: "top", background: d === date ? "var(--tr-accent-soft)" : undefined }}>
                       <div style={{ fontSize: 32, fontWeight: 700, lineHeight: 1.1 }}>{guests.length}</div>
                       {tags.length > 0 && (
-                        <ul className="tr-muted" style={{ fontSize: 11, marginTop: 4, marginBottom: 0, paddingLeft: 16 }}>
+                        <ul
+                          className="tr-muted"
+                          style={{ fontSize: 11, marginTop: 4, marginBottom: 0, paddingLeft: 16, listStyle: "none" }}
+                        >
                           {tags.map((t) => (
-                            <li key={t.tag}>{t.count}x {t.tag}</li>
+                            <li key={t.tag} style={{ marginBottom: 2, overflowWrap: "break-word" }}>
+                              <div>{t.count}x {t.tag}</div>
+                              <div>({t.guestNames.join(", ")})</div>
+                            </li>
                           ))}
                         </ul>
                       )}
