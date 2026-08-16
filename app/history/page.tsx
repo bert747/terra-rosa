@@ -6,7 +6,7 @@ interface ChangeLogEntry {
   id: number;
   createdAt: string;
   userName: string;
-  category: "grid" | "bookings" | "events" | "layout";
+  category: "grid" | "bookings" | "events" | "layout" | "guests";
   action: string;
   summary: string;
 }
@@ -16,6 +16,7 @@ const CATEGORY_LABELS: Record<ChangeLogEntry["category"], string> = {
   bookings: "Bookings",
   events: "Events",
   layout: "Layout",
+  guests: "Guests",
 };
 
 function formatTimestamp(iso: string): string {

@@ -86,7 +86,6 @@ function NewBookingForm() {
   });
   const [dietaryTags, setDietaryTags] = useState<string[]>([]);
   const [linkedGuest, setLinkedGuest] = useState<GuestProfile | null>(null);
-  const [createGuestProfile, setCreateGuestProfile] = useState(false);
   const dietarySuggestions = useDietaryTagSuggestions();
   const guestCategories = useGuestCategories().filter((c) => c.active);
   // Live preview of the selected guest type's colour — see the identical
@@ -141,6 +140,29 @@ function NewBookingForm() {
       return;
     }
 
+    // Every booking ends up linked to a guest profile — either the existing
+    // one just picked (linkedGuest set, no popup needed — already a
+    // deliberate choice), or a brand-new one made from whatever's currently
+    // typed, which DOES get a confirming popup first (naming exactly who
+    // it's about to create) since it's otherwise an easy click to fire off
+    // by accident on a booking that should have been linked to someone who
+    // already exists. "Go back" just closes the popup — nothing is saved,
+    // and there is no third "save without a profile" option; that's the
+    // whole point of this flow (see GuestProfilePicker's own doc comment).
+    if (!linkedGuest) {
+      setConfirmModal({
+        title: "Create guest profile?",
+        message: `This creates a new guest profile: ${form.firstName.trim()} ${form.lastName.trim()}.`,
+        confirmLabel: "Create and save",
+        cancelLabel: "Go back",
+        onConfirm: () => proceedToBedCheck(true),
+      });
+      return;
+    }
+    proceedToBedCheck(false);
+  }
+
+  function proceedToBedCheck(createGuestProfile: boolean) {
     // Picking a bed the dropdown already labeled "shares with X" is a real
     // decision worth a beat to confirm — staff can pick the wrong row in a
     // dropdown as easily as anywhere else, and undoing a same-bed pairing
@@ -156,17 +178,17 @@ function NewBookingForm() {
         message: `Do you want ${form.firstName.trim() || "this guest"} to share a bed with ${directPairOccupant.guestName}?`,
         confirmLabel: "Yes, share the bed",
         secondaryLabel: "No, choose another bed",
-        onConfirm: () => performSubmit(),
+        onConfirm: () => performSubmit(createGuestProfile),
         onSecondary: () => {
           setForm((f) => ({ ...f, bedId: "", partnerBedId: "", sharesWithId: null, sharesWithMode: "room" }));
         },
       });
       return;
     }
-    performSubmit();
+    performSubmit(createGuestProfile);
   }
 
-  async function performSubmit() {
+  async function performSubmit(createGuestProfile: boolean) {
     setSaving(true);
     setError(null);
 
@@ -188,7 +210,7 @@ function NewBookingForm() {
         partnerBedId: form.partnerBedId || null,
         guestCategoryId: form.guestCategoryId || null,
         dietariesTags: dietaryTags.length > 0 ? dietaryTags : null,
-        ...(linkedGuest ? { guestId: linkedGuest.id } : createGuestProfile ? { createGuestProfile: true } : {}),
+        ...(linkedGuest ? { guestId: linkedGuest.id } : { createGuestProfile }),
       }),
     });
 
@@ -251,6 +273,21 @@ function NewBookingForm() {
             : undefined
         }
       >
+        <div style={{ marginBottom: 10 }}>
+          <GuestProfilePicker
+            linkedGuest={linkedGuest}
+            createNew={false}
+            showCreateCheckbox={false}
+            onSelect={(g) => {
+              setLinkedGuest(g);
+              setForm({ ...form, firstName: g.firstName, lastName: g.lastName, preferredName: g.preferredName ?? "" });
+              setDietaryTags(Array.isArray(g.dietariesTags) ? (g.dietariesTags as string[]) : []);
+            }}
+            onUnlink={() => setLinkedGuest(null)}
+            onToggleCreateNew={() => {}}
+          />
+        </div>
+
         <div className="tr-inline-grid-3">
           <Field label="First name" required>
             <input
@@ -273,21 +310,6 @@ function NewBookingForm() {
               placeholder="Optional — shown on the grid"
             />
           </Field>
-        </div>
-
-        <div style={{ marginBottom: 10 }}>
-          <GuestProfilePicker
-            linkedGuest={linkedGuest}
-            createNew={createGuestProfile}
-            onSelect={(g) => {
-              setLinkedGuest(g);
-              setCreateGuestProfile(false);
-              setForm({ ...form, firstName: g.firstName, lastName: g.lastName, preferredName: g.preferredName ?? "" });
-              setDietaryTags(Array.isArray(g.dietariesTags) ? (g.dietariesTags as string[]) : []);
-            }}
-            onUnlink={() => setLinkedGuest(null)}
-            onToggleCreateNew={setCreateGuestProfile}
-          />
         </div>
 
         <div className="tr-inline-grid-3">

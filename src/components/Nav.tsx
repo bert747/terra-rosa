@@ -12,6 +12,7 @@ const VIEWER_LINKS: NavLink[] = [{ href: "/daily-sheet", label: "Daily Sheet" }]
 const EDITOR_LINKS: NavLink[] = [
   { href: "/grid", label: "Grid" },
   { href: "/bookings", label: "Bookings" },
+  { href: "/guests", label: "Guests" },
   { href: "/events", label: "Events" },
   { href: "/daily-sheet", label: "Daily Sheet" },
   { href: "/settings/layout", label: "Layout" },

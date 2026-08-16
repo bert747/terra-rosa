@@ -10,6 +10,8 @@ export interface ConfirmModalState {
   /** Optional second action button, rendered between Cancel and the primary confirm button — for a genuine 3-way choice (e.g. "This segment" vs "All segments") rather than a plain yes/no. */
   secondaryLabel?: string;
   onSecondary?: () => Promise<void> | void;
+  /** Overrides the always-present dismiss button's label (default "Cancel") — e.g. "Go back" for a confirm-before-creating prompt, where "cancel" reads as cancelling the whole booking rather than just this one decision. */
+  cancelLabel?: string;
 }
 
 /**
@@ -54,7 +56,7 @@ export default function ConfirmModal({ state, onClose }: { state: ConfirmModalSt
         <h2 style={{ marginTop: 0, fontSize: 16 }}>{state.title}</h2>
         <p style={{ marginBottom: 16 }}>{state.message}</p>
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
-          <button type="button" className="tr-btn-soft" onClick={onClose} disabled={saving}>Cancel</button>
+          <button type="button" className="tr-btn-soft" onClick={onClose} disabled={saving}>{state.cancelLabel ?? "Cancel"}</button>
           {state.secondaryLabel && (
             <button type="button" onClick={handleSecondary} disabled={saving}>
               {state.secondaryLabel}

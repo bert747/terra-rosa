@@ -510,6 +510,21 @@ export default function BookingDetailPage() {
             : undefined
         }
       >
+        <div style={{ marginBottom: 10 }}>
+          <GuestProfilePicker
+            linkedGuest={linkedGuest}
+            createNew={createGuestProfile}
+            onSelect={(g) => {
+              setLinkedGuest(g);
+              setCreateGuestProfile(false);
+              setDraft({ ...draft, firstName: g.firstName, lastName: g.lastName, preferredName: g.preferredName ?? "" });
+              setDietaryTags(Array.isArray(g.dietariesTags) ? (g.dietariesTags as string[]) : []);
+            }}
+            onUnlink={() => setLinkedGuest(null)}
+            onToggleCreateNew={setCreateGuestProfile}
+          />
+        </div>
+
         <div className="tr-inline-grid-3">
           <Field label="First name">
             <input value={draft.firstName} onChange={(e) => setDraft({ ...draft, firstName: e.target.value })} />
@@ -524,21 +539,6 @@ export default function BookingDetailPage() {
               placeholder="Optional — shown on the grid"
             />
           </Field>
-        </div>
-
-        <div style={{ marginBottom: 10 }}>
-          <GuestProfilePicker
-            linkedGuest={linkedGuest}
-            createNew={createGuestProfile}
-            onSelect={(g) => {
-              setLinkedGuest(g);
-              setCreateGuestProfile(false);
-              setDraft({ ...draft, firstName: g.firstName, lastName: g.lastName, preferredName: g.preferredName ?? "" });
-              setDietaryTags(Array.isArray(g.dietariesTags) ? (g.dietariesTags as string[]) : []);
-            }}
-            onUnlink={() => setLinkedGuest(null)}
-            onToggleCreateNew={setCreateGuestProfile}
-          />
         </div>
 
         <div className="tr-inline-grid-3">

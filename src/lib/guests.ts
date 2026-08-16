@@ -10,6 +10,23 @@ export interface GuestProfileFields {
 }
 
 /**
+ * Pushes `fields` onto every booking currently linked to `guestId` — the
+ * shared bit of "editing a guest's name/dietary keeps every booking that
+ * references them current" (see resolveGuestLink below), also used by
+ * `PATCH /api/guests/[id]` so editing a profile directly from the /guests
+ * page has the exact same effect as editing it via a linked booking.
+ * Deliberately does NOT touch email/phone — those are pure contact info,
+ * never mirrored onto bookings.* (see the guests table's own schema
+ * comment), so there's nothing of theirs for a booking row to keep in sync.
+ */
+export async function syncGuestFieldsToBookings(guestId: number, fields: GuestProfileFields): Promise<void> {
+  await db
+    .update(bookings)
+    .set({ ...fields, guestName: `${fields.firstName} ${fields.lastName}`.trim() })
+    .where(eq(bookings.guestId, guestId));
+}
+
+/**
  * Resolves what a booking POST/PATCH's `guestId`/`createGuestProfile` body
  * fields mean for the guests table, and returns what `bookings.guestId`
  * should become. A booking form sends at most one of:
@@ -46,10 +63,7 @@ export async function resolveGuestLink(
     // changing this save — dates, bed, etc.). Without this, editing
     // dietary on Mary's third booking would leave her first and second
     // showing stale info until each was independently re-linked.
-    await db
-      .update(bookings)
-      .set({ ...fields, guestName: `${fields.firstName} ${fields.lastName}`.trim() })
-      .where(eq(bookings.guestId, body.guestId));
+    await syncGuestFieldsToBookings(body.guestId, fields);
     return body.guestId;
   }
   return undefined;

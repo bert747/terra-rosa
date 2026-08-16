@@ -215,16 +215,22 @@ export const bedSoloPeriods = pgTable("bed_solo_periods", {
 // booking linked to a guest updates this row, which every OTHER booking
 // linked to the same guest then reads through bookings.guestId (see that
 // column's own comment for the "kept in sync onto the booking row too"
-// mechanics). Deliberately opt-in, not automatic — existing bookings are
-// never retroactively matched into a guest profile; staff link one
-// explicitly (search-existing or "save as a new profile") from the booking
-// form when they actually want to.
+// mechanics). Every NEW booking from here on links to one — either an
+// existing profile (searched) or a brand-new one, confirmed via a popup
+// naming it, created at save time (see app/bookings/new/page.tsx). Existing
+// (pre-this-feature) bookings are never retroactively matched into a
+// profile — linking one to an old booking is optional, done by hand from
+// its own edit page when staff actually want to. email/phone are pure
+// contact info, not mirrored onto bookings.* the way name/dietary are —
+// they only ever live here, edited from the standalone /guests page.
 export const guests = pgTable("guests", {
   id: serial("id").primaryKey(),
   firstName: text("first_name").notNull(),
   lastName: text("last_name").notNull(),
   preferredName: text("preferred_name"),
   dietariesTags: jsonb("dietaries_tags"),
+  email: text("email"),
+  phone: text("phone"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
 
@@ -290,7 +296,7 @@ export const changeLogEntries = pgTable("change_log_entries", {
   userName: text("user_name").notNull(),
   // Which top-level area this change belongs to — drives the /history page's
   // own filter dropdown. Deliberately coarse (not one category per table).
-  category: text("category", { enum: ["grid", "bookings", "events", "layout"] }).notNull(),
+  category: text("category", { enum: ["grid", "bookings", "events", "layout", "guests"] }).notNull(),
   // Short verb phrase for the list ("Moved bed", "Created booking", …) plus
   // a fuller one-line summary with the actual names/dates involved.
   action: text("action").notNull(),

@@ -2,7 +2,7 @@ import { db } from "@/db";
 import { changeLogEntries } from "@/db/schema";
 import { getCurrentUser } from "@/lib/auth";
 
-export type ChangeLogCategory = "grid" | "bookings" | "events" | "layout";
+export type ChangeLogCategory = "grid" | "bookings" | "events" | "layout" | "guests";
 
 /**
  * Records one line in the change history (see app/history/page.tsx) —
