@@ -170,9 +170,7 @@ export async function findGroupRoomFixOptions(startBookingId: number): Promise<R
       .map((roomId) => (roomId != null ? roomById.get(roomId)?.categoryId ?? null : null))
       .filter((categoryId): categoryId is number => categoryId != null)
   );
-  const candidateRoomRows = allRoomRows.filter(
-    (r) => !r.excludeFromSuggestions && r.categoryId != null && referenceCategoryIds.has(r.categoryId)
-  );
+  const candidateRoomRows = allRoomRows.filter((r) => r.categoryId != null && referenceCategoryIds.has(r.categoryId));
 
   // Excludes only the ONE booking a candidate bed is being evaluated for —
   // never the rest of the group. A bed another group member currently sits

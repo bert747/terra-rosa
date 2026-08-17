@@ -21,14 +21,20 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   if (body.name !== undefined) updates.name = String(body.name).trim();
   if (body.floorId !== undefined) updates.floorId = Number(body.floorId);
   if (body.categoryId !== undefined) updates.categoryId = body.categoryId ? Number(body.categoryId) : null;
-  if (body.excludeFromSuggestions !== undefined) updates.excludeFromSuggestions = Boolean(body.excludeFromSuggestions);
+  if (body.showInBedsToMake !== undefined) updates.showInBedsToMake = Boolean(body.showInBedsToMake);
   if (body.rank !== undefined) updates.rank = Number(body.rank);
 
   const [room] = await db.update(rooms).set(updates).where(eq(rooms.id, Number(id))).returning();
   if (!room) return NextResponse.json({ error: "Room not found" }, { status: 404 });
 
-  if (updates.categoryId !== undefined || updates.excludeFromSuggestions !== undefined) {
-    await logChange({ category: "layout", action: "Updated room suggestions setting", summary: `Updated "${room.name}"'s move-suggestion settings` });
+  if (updates.showInBedsToMake !== undefined) {
+    await logChange({
+      category: "layout",
+      action: "Updated room housekeeping setting",
+      summary: `${room.showInBedsToMake ? "Included" : "Excluded"} "${room.name}" ${room.showInBedsToMake ? "in" : "from"} beds to move/make`,
+    });
+  } else if (updates.categoryId !== undefined) {
+    await logChange({ category: "layout", action: "Updated room category", summary: `Updated "${room.name}"'s category` });
   } else if (updates.floorId !== undefined) {
     // A cross-floor drag (see the Layout page's handleRoomDrop) sends both
     // floorId and rank on the ONE room that actually moved floors — worth

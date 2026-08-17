@@ -243,6 +243,11 @@ export async function buildHousekeepingSheet(date: ISODate): Promise<Housekeepin
 
   const roomNameById = new Map(roomRows.map((r) => [r.id, r.name]));
   const bedTypeById = new Map(bedRows.map((b) => [b.id, b.type]));
+  // Rooms with showInBedsToMake off (staff/owner quarters — see rooms' own
+  // schema comment) never appear in "Beds to move" or "Beds to make":
+  // whoever sleeps there handles their own bed, so housekeeping shouldn't be
+  // told to carry/make one for them.
+  const excludedRoomIds = new Set(roomRows.filter((r) => !r.showInBedsToMake).map((r) => r.id));
   const spotsByRoomType = countRoomSpotsByType(gridData.grid);
   // Joins that neither start nor end today but are still active need
   // checking too, for the arrivals bed-type fold — cheap enough to just
@@ -261,8 +266,11 @@ export async function buildHousekeepingSheet(date: ISODate): Promise<Housekeepin
 
   // Strictly literal room-to-room bed carries only — a join/split doesn't
   // carry a bed anywhere, so that work lives entirely in Beds to Make below,
-  // never here.
-  const moverTasks = netMoves(rawMoves, roomNameById);
+  // never here. Moves touching an excluded room (see excludedRoomIds above)
+  // are dropped entirely, not just relabelled — nobody needs to carry
+  // anything to/from a room that makes its own beds.
+  const movesExcludingStaffRooms = rawMoves.filter((m) => !excludedRoomIds.has(m.fromRoomId) && !excludedRoomIds.has(m.toRoomId));
+  const moverTasks = netMoves(movesExcludingStaffRooms, roomNameById);
 
   // Solo <-> Couple switches never change what housekeeping actually does
   // (still a made-up double either way) — deliberately not counted as "made"
@@ -271,7 +279,13 @@ export async function buildHousekeepingSheet(date: ISODate): Promise<Housekeepin
   void soloStartingToday;
   void soloEndingToday;
 
+  // A departing booking whose split lineage root also has an arrival today
+  // (see arrivals' roomMoves fold below) is the same stay picking up in a
+  // new bed, not a real departure — the guest never actually leaves, so
+  // listing them under Departures would be misleading.
+  const arrivingSplitRoots = new Set(arrivingToday.map((b) => b.splitGroupId ?? b.id));
   const departures: DepartureEntry[] = departingToday
+    .filter((b) => !arrivingSplitRoots.has(b.splitGroupId ?? b.id))
     .map((b) => ({ guestName: b.guestName }))
     .sort((a, b) => a.guestName.localeCompare(b.guestName));
 
@@ -285,6 +299,7 @@ export async function buildHousekeepingSheet(date: ISODate): Promise<Housekeepin
   // work the other direction.
   const madeByRoomType = new Map<number, Map<string, number>>();
   function addMade(roomId: number, bedType: string, count = 1) {
+    if (excludedRoomIds.has(roomId)) return;
     const forRoom = madeByRoomType.get(roomId) ?? new Map<string, number>();
     forRoom.set(bedType, (forRoom.get(bedType) ?? 0) + count);
     madeByRoomType.set(roomId, forRoom);

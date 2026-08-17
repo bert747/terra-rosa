@@ -101,11 +101,12 @@ export const rooms = pgTable("rooms", {
   // means genuinely one-of-a-kind (never offered as a swap for anything,
   // never has anything swapped in for it either). See roomCategories above.
   categoryId: integer("category_id").references((): AnyPgColumn => roomCategories.id, { onDelete: "set null" }),
-  // Never offered as a Fix/move-suggestion target, full stop, regardless of
-  // category — the owner's own room, the chef's room, the caravan, and (for
-  // now — see the "Friends & Family" guest category) the rooms only ever
-  // used for friends & family guests, which staff still place by hand.
-  excludeFromSuggestions: boolean("exclude_from_suggestions").notNull().default(false),
+  // False for staff/owner quarters (a room only its permanent occupant ever
+  // sleeps in, who makes/changes their own bed) — the Daily Sheet's "Beds to
+  // move" and "Beds to make" lists skip any room with this off. Guests still
+  // show up normally everywhere else on the sheet (arrivals, meals, etc);
+  // this only ever hides housekeeping tasks for a room, never a person.
+  showInBedsToMake: boolean("show_in_beds_to_make").notNull().default(true),
   // Manual display order within a floor (lower = earlier), drag-to-reorder
   // in Layout settings — same pattern as roomCategories.rank above. Every
   // room defaults to 0, so until someone actually drags a row, sortRooms()

@@ -26,7 +26,7 @@ interface Room {
   name: string;
   floorId: number;
   categoryId: number | null;
-  excludeFromSuggestions: boolean;
+  showInBedsToMake: boolean;
   rank: number;
 }
 
@@ -328,12 +328,12 @@ export default function PropertyLayoutPage() {
     if (ok) load();
   }
 
-  async function setRoomExcluded(room: Room, excludeFromSuggestions: boolean) {
+  async function setRoomShowInBedsToMake(room: Room, showInBedsToMake: boolean) {
     const ok = await withError(() =>
       fetch(`/api/rooms/${room.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ excludeFromSuggestions }),
+        body: JSON.stringify({ showInBedsToMake }),
       })
     );
     if (ok) load();
@@ -910,12 +910,23 @@ export default function PropertyLayoutPage() {
                                   {categories.find((c) => c.id === room.categoryId)?.name ?? ""}
                                 </span>
                               )}
-                              {room.excludeFromSuggestions && (
-                                <span className="tr-muted" style={{ fontSize: 11, marginLeft: 6 }}>
-                                  (excluded from suggestions)
-                                </span>
-                              )}
                             </span>
+                          )}
+
+                          {editingRoomId !== room.id && (
+                            <label
+                              className="tr-muted"
+                              data-tooltip="Whether this room shows up in the Daily Sheet's Beds to move/Beds to make lists"
+                              style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 12, cursor: "pointer" }}
+                            >
+                              <input
+                                type="checkbox"
+                                className="tr-settings-checkbox"
+                                checked={room.showInBedsToMake}
+                                onChange={(e) => setRoomShowInBedsToMake(room, e.target.checked)}
+                              />
+                              Show in beds to make
+                            </label>
                           )}
 
                           {editMode && editingRoomId !== room.id && (
@@ -926,9 +937,10 @@ export default function PropertyLayoutPage() {
                           )}
                         </div>
 
-                        {/* Move/fix-suggestion settings — see room_categories' own schema
-                            comment for what these actually control. Only shown in edit
-                            mode, same as rename/delete, to keep the read view plain. */}
+                        {/* Category assignment — see room_categories' own schema comment for
+                            what this controls (interchangeable-room move/fix suggestions).
+                            Only shown in edit mode, same as rename/delete, to keep the read
+                            view plain. */}
                         {editMode && editingRoomId !== room.id && (
                           <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 6, paddingLeft: 2, flexWrap: "wrap" }}>
                             <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 12 }}>
@@ -943,15 +955,6 @@ export default function PropertyLayoutPage() {
                                   <option key={c.id} value={c.id}>{c.name}</option>
                                 ))}
                               </select>
-                            </label>
-                            <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 12, cursor: "pointer" }}>
-                              <input
-                                type="checkbox"
-                                className="tr-settings-checkbox"
-                                checked={room.excludeFromSuggestions}
-                                onChange={(e) => setRoomExcluded(room, e.target.checked)}
-                              />
-                              <span className="tr-muted">Exclude from move/fix suggestions</span>
                             </label>
                           </div>
                         )}
