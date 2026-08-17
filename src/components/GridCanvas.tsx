@@ -933,10 +933,16 @@ export default function GridCanvas({ initialData, today }: { initialData: GridDa
         // honoured too if present, in case both arrive on the same event.
         const horizontalDelta = e.deltaX !== 0 ? e.deltaX : e.deltaY;
         pendingScrollRef.current = { left: current.left + horizontalDelta * WHEEL_SCROLL_FACTOR, top: current.top };
+      } else if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) {
+        // Without Shift, a genuine two-finger left/right trackpad swipe
+        // (deltaX dominant) still pans the grid horizontally, same as any
+        // normal scrollable page — only Shift is required for a plain mouse
+        // wheel, which never reports deltaX at all.
+        pendingScrollRef.current = { left: current.left + e.deltaX * WHEEL_SCROLL_FACTOR, top: current.top };
       } else {
-        // Without Shift, scrolling is vertical-only — a trackpad's incidental
-        // sideways drift on an otherwise-vertical swipe no longer nudges the
-        // grid horizontally too.
+        // Otherwise vertical — a trackpad's incidental sideways drift on an
+        // otherwise-vertical swipe still doesn't also nudge the grid
+        // horizontally.
         pendingScrollRef.current = { left: current.left, top: current.top + e.deltaY * WHEEL_SCROLL_FACTOR };
       }
       if (panRafRef.current == null) panRafRef.current = requestAnimationFrame(flushPanScroll);
