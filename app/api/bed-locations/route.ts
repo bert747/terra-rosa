@@ -58,6 +58,12 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  // Far-future sentinel so an open-ended row (endDate === null) compares as
+  // "later than any real date" below, without special-casing null at every
+  // comparison — converted back to a real null before writing anything.
+  const FAR_FUTURE = "9999-12-31";
+  const windowEnd = endDate ?? FAR_FUTURE;
+
   const conflicting = await db
     .select()
     .from(bedLocations)
@@ -66,10 +72,31 @@ export async function POST(req: NextRequest) {
     );
 
   for (const row of conflicting) {
-    if (row.startDate >= startDate) {
+    const rowEnd = row.endDate ?? FAR_FUTURE;
+    if (row.startDate < startDate && rowEnd > windowEnd) {
+      // This single row spans clean across the whole new window (the common
+      // case: an open-ended "current room" row covering both the new move's
+      // start AND its end) — truncating it to startDate alone would leave
+      // nothing to resume the original room once the new (bounded) move
+      // ends, silently stranding the bed in no room at all from endDate
+      // onward. Split it instead: end the original here, then re-insert its
+      // own tail (same room, same original end) picking back up at
+      // windowEnd — a no-op unless endDate was actually given, since
+      // windowEnd is FAR_FUTURE (never < rowEnd) otherwise.
+      await db.update(bedLocations).set({ endDate: startDate }).where(eq(bedLocations.id, row.id));
+      await db.insert(bedLocations).values({ bedId, roomId: row.roomId, startDate: windowEnd, endDate: row.endDate });
+    } else if (row.startDate < startDate) {
+      // Starts before the new window but doesn't reach past its end — just
+      // ends right where the new move begins.
+      await db.update(bedLocations).set({ endDate: startDate }).where(eq(bedLocations.id, row.id));
+    } else if (rowEnd <= windowEnd) {
+      // Fully inside the new window — entirely superseded.
       await db.delete(bedLocations).where(eq(bedLocations.id, row.id));
     } else {
-      await db.update(bedLocations).set({ endDate: startDate }).where(eq(bedLocations.id, row.id));
+      // Starts inside the window but runs past it (a move already planned
+      // to happen mid-window) — keep it, just pushed back to start once the
+      // new bounded move ends.
+      await db.update(bedLocations).set({ startDate: windowEnd }).where(eq(bedLocations.id, row.id));
     }
   }
 

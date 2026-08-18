@@ -97,16 +97,23 @@ export default function BedActionModal({
   state: BedActionModalState | null;
   dormStorageRoomId: number;
   onClose: () => void;
-  onSubmit: (bedId: number, roomId: number, startDate: ISODate, previousRoomId: number) => Promise<void> | void;
+  onSubmit: (bedId: number, roomId: number, startDate: ISODate, previousRoomId: number, endDate?: ISODate | null) => Promise<void> | void;
 }) {
   const [rooms, setRooms] = useState<RoomOption[]>([]);
   const [roomId, setRoomId] = useState<number | null>(null);
   const [startDate, setStartDate] = useState<ISODate>("");
+  // Optional — leaving it blank means "until the next move", the same
+  // open-ended behaviour the modal always had. Set it to carve out a
+  // temporary window (e.g. the bed needs to sit elsewhere for a few days
+  // before resuming wherever it was already headed) without first having to
+  // unwind whatever's already been planned/booked past that point.
+  const [endDate, setEndDate] = useState<ISODate>("");
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     if (!state) return;
     setStartDate(state.defaultDate);
+    setEndDate("");
     setRoomId(null);
     setSaving(false);
     if (state.mode !== "move") return;
@@ -132,13 +139,13 @@ export default function BedActionModal({
   if (!state) return null;
 
   const targetRoomId = state.mode === "storage" ? dormStorageRoomId : roomId;
-  const canSubmit = targetRoomId != null && targetRoomId > 0 && !!startDate;
+  const canSubmit = targetRoomId != null && targetRoomId > 0 && !!startDate && (!endDate || endDate > startDate);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!canSubmit || !state || targetRoomId == null) return;
     setSaving(true);
-    await onSubmit(state.bedId, targetRoomId, startDate, state.previousRoomId);
+    await onSubmit(state.bedId, targetRoomId, startDate, state.previousRoomId, endDate || null);
   }
 
   return (
@@ -163,6 +170,13 @@ export default function BedActionModal({
         <label style={{ display: "block", marginBottom: 16 }}>
           <div className="tr-muted" style={{ fontSize: 12, marginBottom: 4 }}>Effective date</div>
           <DateField value={startDate} onChange={setStartDate} required />
+        </label>
+
+        <label style={{ display: "block", marginBottom: 16 }}>
+          <div className="tr-muted" style={{ fontSize: 12, marginBottom: 4 }}>
+            Until (optional — leave blank to keep this bed here until the next move)
+          </div>
+          <DateField value={endDate} onChange={setEndDate} />
         </label>
 
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>

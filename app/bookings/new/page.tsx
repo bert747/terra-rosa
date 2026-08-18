@@ -20,7 +20,7 @@ interface BedOption {
 }
 
 function bedOptionLabel(bed: BedOption): string {
-  const base = `${bed.type} — ${bed.room.roomName}`;
+  const base = `${bed.room.roomName} — ${bed.type}`;
   if (!bed.sharesWith) return base;
   return `${base} (shares with ${bed.sharesWith.guestName}, ${formatDateUk(bed.sharesWith.arrivalDate)}–${formatDateUk(bed.sharesWith.departureDate)})`;
 }

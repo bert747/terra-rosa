@@ -2131,8 +2131,8 @@ export default function GridCanvas({ initialData, today }: { initialData: GridDa
           },
         });
       },
-      async moveBed(bedId: number, roomId: number, startDate: ISODate, previousRoomId: number) {
-        const result = await apiPost("/api/bed-locations", { bedId, roomId, startDate });
+      async moveBed(bedId: number, roomId: number, startDate: ISODate, previousRoomId: number, endDate?: ISODate | null) {
+        const result = await apiPost("/api/bed-locations", { bedId, roomId, startDate, endDate: endDate ?? undefined });
         if (!result) return;
         await refreshCurrentWindow();
         if (previousRoomId === roomId) return; // dropped back where it started — nothing to undo
@@ -2142,11 +2142,15 @@ export default function GridCanvas({ initialData, today }: { initialData: GridDa
             // Same effective date, previous room — POST's own truncate logic
             // (see /api/bed-locations) then puts the bed back exactly where
             // it was as of that date, the same way the forward move worked.
+            // Deliberately open-ended even if the original move had its own
+            // end date — undo just reverses "the bed changed room here", not
+            // a perfect replay of whatever else happened to its room history
+            // since.
             await apiPost("/api/bed-locations", { bedId, roomId: previousRoomId, startDate });
             await refreshCurrentWindow();
           },
           redo: async () => {
-            await apiPost("/api/bed-locations", { bedId, roomId, startDate });
+            await apiPost("/api/bed-locations", { bedId, roomId, startDate, endDate: endDate ?? undefined });
             await refreshCurrentWindow();
           },
         });
@@ -2600,8 +2604,8 @@ export default function GridCanvas({ initialData, today }: { initialData: GridDa
         state={bedActionModal}
         dormStorageRoomId={data.dormStorageRoomId}
         onClose={() => setBedActionModal(null)}
-        onSubmit={async (bedId, roomId, startDate, previousRoomId) => {
-          await actions.moveBed(bedId, roomId, startDate, previousRoomId);
+        onSubmit={async (bedId, roomId, startDate, previousRoomId, endDate) => {
+          await actions.moveBed(bedId, roomId, startDate, previousRoomId, endDate);
           setBedActionModal(null);
         }}
       />
@@ -2774,7 +2778,7 @@ interface GridActions {
     draggedName: string;
     otherName: string;
   }) => void;
-  moveBed: (bedId: number, roomId: number, startDate: ISODate, previousRoomId: number) => void;
+  moveBed: (bedId: number, roomId: number, startDate: ISODate, previousRoomId: number, endDate?: ISODate | null) => void;
   moveEvent: (
     eventId: number,
     name: string,
@@ -3601,7 +3605,6 @@ function renderDepartingTail(
         // needs its own copy, not inherited.
         ...bookingColourVars(booking.guestCategoryColour),
       }}
-      data-tooltip={laterSibling ? undefined : `${booking.guestName} - checks out today`}
       // See the identical comment on the "+" new-booking link in
       // renderSingleCell — without this, the viewport's own drag-to-pan
       // handler steals pointer capture and the click/dblclick below never
@@ -3623,7 +3626,6 @@ function renderDepartingTail(
       {laterSibling && (
         <span
           className="tr-grid-pill-split-nav"
-          style={{ marginRight: 4 }}
           data-tooltip={`Later part — ${arrivingBedInfo ? `${arrivingBedInfo.bedLabel} in ${arrivingBedInfo.roomName}, ` : ""}from ${formatDateUk(laterSibling.arrivalDate)}`}
           onPointerDown={(e) => e.stopPropagation()}
           onClick={(e) => {
@@ -3772,6 +3774,8 @@ interface PillDragState {
   guestName: string;
   /** A split booking's own dates never move by dragging — see onPillPointerDown's own comment. */
   isSplitBooking: boolean;
+  /** Set whenever isSplitBooking — lets onPillPointerUp look up an adjacent sibling (actions.splitGroups) after a resize, to offer shifting its own start/end date to match. */
+  splitGroupId: number | null;
   bedId: number;
   arrivalDate: ISODate;
   departureDate: ISODate;
@@ -4065,6 +4069,7 @@ function onPillPointerDown(
     // its BED can move by dragging; use Split/Merge for the dates
     // themselves. See onPillPointerMove's move branch, which reads this.
     isSplitBooking: booking.splitGroupId != null,
+    splitGroupId: booking.splitGroupId ?? null,
     bedId,
     arrivalDate: booking.arrivalDate,
     departureDate: booking.departureDate,
@@ -4282,10 +4287,53 @@ function onPillPointerUp(e: React.PointerEvent<HTMLAnchorElement>, actions: Grid
   // place.
   if (ds.dropValidity === "invalid") return;
   if (ds.kind === "resize-start") {
-    actions.resizeBookingDates(ds.bookingId, "arrivalDate", ds.arrivalDate, addDaysIso(ds.arrivalDate, deltaDays), ds.guestName);
+    const newArrival = addDaysIso(ds.arrivalDate, deltaDays);
+    actions.resizeBookingDates(ds.bookingId, "arrivalDate", ds.arrivalDate, newArrival, ds.guestName);
+    promptShiftAdjacentSplitSibling(ds, actions, "earlier", newArrival);
   } else {
-    actions.resizeBookingDates(ds.bookingId, "departureDate", ds.departureDate, addDaysIso(ds.departureDate, deltaDays), ds.guestName);
+    const newDeparture = addDaysIso(ds.departureDate, deltaDays);
+    actions.resizeBookingDates(ds.bookingId, "departureDate", ds.departureDate, newDeparture, ds.guestName);
+    promptShiftAdjacentSplitSibling(ds, actions, "later", newDeparture);
   }
+}
+
+/**
+ * After resizing one part of a split booking, its neighbouring sibling (in a
+ * DIFFERENT bed, picking up exactly where this part used to end/start) is
+ * left behind at the old boundary — the two are no longer contiguous. Rather
+ * than silently leaving that gap/overlap, or silently moving the sibling too
+ * (its own bed/room choice is a separate decision Bert may not want touched),
+ * this asks once, right after the resize itself has already committed.
+ * Deliberately does nothing for isSplitBooking's OWN center-grab move (locked
+ * to delta 0 already) — only a genuine edge resize can create this gap.
+ */
+function promptShiftAdjacentSplitSibling(
+  ds: PillDragState,
+  actions: GridActions,
+  which: "earlier" | "later",
+  newBoundaryDate: ISODate
+) {
+  if (ds.splitGroupId == null) return;
+  const siblings = actions.splitGroups[String(ds.splitGroupId)] ?? [];
+  const oldBoundaryDate = which === "earlier" ? ds.arrivalDate : ds.departureDate;
+  const sibling =
+    which === "earlier"
+      ? siblings.find((s) => s.id !== ds.bookingId && s.departureDate === oldBoundaryDate)
+      : siblings.find((s) => s.id !== ds.bookingId && s.arrivalDate === oldBoundaryDate);
+  if (!sibling) return; // No adjacent part at that boundary — e.g. a gap already existed, or this is the lineage's first/last part.
+  const siblingBedInfo = sibling.bedId != null ? actions.bedInfoById.get(sibling.bedId) : undefined;
+  const siblingField = which === "earlier" ? "departureDate" : "arrivalDate";
+  actions.openConfirmModal({
+    title: "Split booking",
+    message: `Change the next part of ${sibling.guestName}'s split booking${siblingBedInfo ? ` (${siblingBedInfo.bedLabel} in ${siblingBedInfo.roomName})` : ""} to ${
+      which === "earlier" ? "end" : "start"
+    } on ${formatDateUk(newBoundaryDate)} too?`,
+    confirmLabel: which === "earlier" ? "Yes, shift end date" : "Yes, shift start date",
+    cancelLabel: "No, I'll move manually",
+    onConfirm: () => {
+      actions.resizeBookingDates(sibling.id, siblingField, oldBoundaryDate, newBoundaryDate, sibling.guestName);
+    },
+  });
 }
 
 /**
