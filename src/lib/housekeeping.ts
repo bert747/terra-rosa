@@ -242,6 +242,10 @@ export async function buildHousekeepingSheet(date: ISODate): Promise<Housekeepin
   const joinsEndingTodayValid = joinsEndingToday.filter((j) => j.endDate != null && j.endDate > j.startDate);
 
   const roomNameById = new Map(roomRows.map((r) => [r.id, r.name]));
+  // Same floor-then-rank order the grid itself displays rooms in (see
+  // grid-data.ts's own sort) — gridData.grid is already sorted that way, so
+  // "Beds to make" just borrows its room order instead of re-deriving it.
+  const roomOrderById = new Map(gridData.grid.map((r, i) => [r.roomId, i]));
   const bedTypeById = new Map(bedRows.map((b) => [b.id, b.type]));
   // Rooms with showInBedsToMake off (staff/owner quarters — see rooms' own
   // schema comment) never appear in "Beds to move" or "Beds to make":
@@ -363,6 +367,11 @@ export async function buildHousekeepingSheet(date: ISODate): Promise<Housekeepin
   }
 
   const roomsToMake: RoomBedCount[] = [...madeByRoomType.entries()]
+    // Floor-then-layout order (see roomOrderById above), not alphabetical —
+    // matches how staff actually walk the building. A room absent from the
+    // grid (shouldn't happen, but a stale/deleted room's id could linger in
+    // madeByRoomType) sorts after every known room rather than crashing.
+    .sort(([roomIdA], [roomIdB]) => (roomOrderById.get(roomIdA) ?? Infinity) - (roomOrderById.get(roomIdB) ?? Infinity))
     .map(([roomId, madeMap]) => {
       const totalMap = spotsByRoomType.get(roomId) ?? new Map<string, number>();
       const types = new Set([...madeMap.keys(), ...totalMap.keys()]);
@@ -374,8 +383,7 @@ export async function buildHousekeepingSheet(date: ISODate): Promise<Housekeepin
         }))
         .sort((a, b) => a.bedType.localeCompare(b.bedType));
       return { roomName: roomNameById.get(roomId) ?? "unknown room", byType };
-    })
-    .sort((a, b) => a.roomName.localeCompare(b.roomName));
+    });
 
   return {
     moverTasks,

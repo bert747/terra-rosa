@@ -350,8 +350,14 @@ export default function DailySheetPage() {
                         >
                           {tags.map((t) => (
                             <li key={t.tag} style={{ marginBottom: 2, overflowWrap: "break-word" }}>
-                              <div>{t.count}x {t.tag}</div>
-                              <div>({t.guestNames.join(", ")})</div>
+                              <div style={{ display: "flex", flexWrap: "wrap", alignItems: "flex-start", gap: 4 }}>
+                                <strong style={{ whiteSpace: "nowrap" }}>{t.count}x {t.tag}</strong>
+                                <div style={{ display: "flex", flexDirection: "column" }}>
+                                  {t.guestNames.map((name, ni) => (
+                                    <span key={ni}>({name})</span>
+                                  ))}
+                                </div>
+                              </div>
                             </li>
                           ))}
                         </ul>
@@ -490,7 +496,9 @@ export default function DailySheetPage() {
             ) : (
               <ul style={{ margin: 0, paddingLeft: 18 }}>
                 {sheet.arrivals.map((a, i) => (
-                  <li key={i}>{a.guestName} ({a.roomName})</li>
+                  <li key={i}>
+                    {a.guestName} <span className="tr-muted">({a.roomName})</span>
+                  </li>
                 ))}
               </ul>
             )}
@@ -503,7 +511,9 @@ export default function DailySheetPage() {
             ) : (
               <ul style={{ margin: 0, paddingLeft: 18 }}>
                 {sheet.roomMoves.map((a, i) => (
-                  <li key={i}>{a.guestName} → {a.roomName}</li>
+                  <li key={i}>
+                    {a.guestName} → <span className="tr-muted">{a.roomName}</span>
+                  </li>
                 ))}
               </ul>
             )}

@@ -11,6 +11,17 @@ const ORDER_STORAGE_KEY = "tr-bookings-column-order";
 const VISIBILITY_STORAGE_KEY = "tr-bookings-column-visibility";
 const WIDTH_STORAGE_KEY = "tr-bookings-column-widths";
 const SPLIT_STORAGE_KEY = "tr-bookings-split-by-arrival";
+// Remembers the in-progress search so clicking into a booking from the
+// results and coming back (a real navigation — unmounts this component)
+// lands back on the same results, not the whole unfiltered page. sessionStorage
+// (not localStorage): scoped to this tab, like the grid's own remembered
+// position — see GridCanvas.tsx's GRID_VIEW_STATE_KEY for the same reasoning.
+const SEARCH_STORAGE_KEY = "tr-bookings-search";
+
+function loadSearch(): string {
+  if (typeof window === "undefined") return "";
+  return window.sessionStorage.getItem(SEARCH_STORAGE_KEY) ?? "";
+}
 
 function loadHiddenKeys(): Set<string> {
   if (typeof window === "undefined") return new Set();
@@ -90,7 +101,7 @@ export default function BookingsSections({
   const [splitByArrival, setSplitByArrival] = useState(true);
   const [columnsMenuOpen, setColumnsMenuOpen] = useState(false);
   const [confirmState, setConfirmState] = useState<ConfirmModalState | null>(null);
-  const [search, setSearch] = useState("");
+  const [search, setSearch] = useState(loadSearch);
   const [searchResults, setSearchResults] = useState<BookingRow[]>([]);
   const [searchLoading, setSearchLoading] = useState(false);
 
@@ -116,6 +127,14 @@ export default function BookingsSections({
     setColumnWidths(loadColumnWidths());
     setSplitByArrival(loadSplitByArrival());
   }, []);
+
+  useEffect(() => {
+    try {
+      window.sessionStorage.setItem(SEARCH_STORAGE_KEY, search);
+    } catch {
+      // Storage unavailable — search still works for this session.
+    }
+  }, [search]);
 
   // Debounced search against /api/bookings/search — a real server query
   // (not a client-side filter) so it can reach bookings outside the page's

@@ -473,42 +473,33 @@ function GridSettingsMenu({
           <div style={{ position: "fixed", inset: 0, zIndex: 39 }} onClick={() => setSettingsMenuOpen(false)} />
           <div className="tr-actions-menu tr-settings-menu" style={{ position: "absolute", top: "calc(100% + 6px)", left: 0, zIndex: 40 }}>
             <div className="tr-actions-menu-title">Display settings</div>
-            <label
-              className="tr-settings-toggle-row"
-              onMouseEnter={() => setHoveredPreviewToggle("sharesWith")}
-              onMouseLeave={() => setHoveredPreviewToggle((v) => (v === "sharesWith" ? null : v))}
-            >
-              <input
-                type="checkbox"
-                checked={showSharesWithText}
-                onChange={(e) => onShowSharesWithTextChange(e.target.checked)}
-                className="tr-settings-checkbox"
-              />
-              <span className="tr-settings-toggle-label">
-                <div style={{ fontWeight: 600 }}>&quot;Shares with&quot; info in grid</div>
+            <div className="tr-settings-toggle-row" style={{ flexDirection: "column", alignItems: "stretch", gap: 6 }}>
+              <span className="tr-settings-toggle-label" style={{ display: "block" }}>
+                <div style={{ fontWeight: 600 }}>Guest name shown on pill</div>
                 <div className="tr-muted" style={{ fontSize: 11, marginTop: 2 }}>
-                  Spells out &quot;(same bed as X)&quot; or &quot;(same room as X)&quot; on every pill with a Sleeps-near/Shares-bed pairing. Turn off to keep just the small icon.
+                  How much of the name fits before it gets crowded — most stays are only a few days, so First name alone is usually enough room.
                 </div>
               </span>
-              {/* Live preview, not a static screenshot — always matches what the toggle actually does, in both themes.
-                  "Luca" and "Rob" — sample names for this preview only, not real guest names anywhere else in
-                  the app. minWidth is sized for the LONGER (toggle-on) state specifically so the pill doesn't
-                  visibly resize when the "(same bed as X)" text appears/disappears — it should always look this
-                  wide. While the row is hovered, this shows what CLICKING would produce (the opposite of the
-                  current setting), not the current setting itself — an instant preview of the effect even when
-                  nothing in the real grid right now happens to demonstrate it. */}
-              <div className="tr-settings-preview">
-                <span className="tr-grid-booking-pill" style={{ position: "static", minWidth: 220 }}>
-                  <span className="tr-grid-pill-satisfied" aria-hidden="true">👥</span>
-                  <span className="tr-grid-pill-name">Luca</span>
-                  {(hoveredPreviewToggle === "sharesWith" ? !showSharesWithText : showSharesWithText) && (
-                    <span className="tr-grid-pill-relation">
-                      (same bed as <strong>Rob</strong>)
-                    </span>
-                  )}
-                </span>
-              </div>
-            </label>
+              {(
+                [
+                  { value: "first", label: "First name", example: "Luca" },
+                  { value: "firstInitial", label: "First name + initial", example: "Luca I" },
+                  { value: "firstLast", label: "First name + full surname", example: "Luca Ilari" },
+                ] as const
+              ).map((opt) => (
+                <label key={opt.value} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer" }}>
+                  <input
+                    type="radio"
+                    name="pillNameMode"
+                    className="tr-settings-checkbox"
+                    checked={pillNameMode === opt.value}
+                    onChange={() => onPillNameModeChange(opt.value)}
+                  />
+                  {opt.label}
+                  <span className="tr-muted" style={{ fontSize: 11 }}>({opt.example})</span>
+                </label>
+              ))}
+            </div>
             <label
               className="tr-settings-toggle-row"
               onMouseEnter={() => setHoveredPreviewToggle("hoverDetails")}
@@ -568,33 +559,42 @@ function GridSettingsMenu({
                 </span>
               </div>
             </label>
-            <div className="tr-settings-toggle-row" style={{ flexDirection: "column", alignItems: "stretch", gap: 6 }}>
-              <span className="tr-settings-toggle-label" style={{ display: "block" }}>
-                <div style={{ fontWeight: 600 }}>Guest name shown on pill</div>
+            <label
+              className="tr-settings-toggle-row"
+              onMouseEnter={() => setHoveredPreviewToggle("sharesWith")}
+              onMouseLeave={() => setHoveredPreviewToggle((v) => (v === "sharesWith" ? null : v))}
+            >
+              <input
+                type="checkbox"
+                checked={showSharesWithText}
+                onChange={(e) => onShowSharesWithTextChange(e.target.checked)}
+                className="tr-settings-checkbox"
+              />
+              <span className="tr-settings-toggle-label">
+                <div style={{ fontWeight: 600 }}>&quot;Shares with&quot; info in grid</div>
                 <div className="tr-muted" style={{ fontSize: 11, marginTop: 2 }}>
-                  How much of the name fits before it gets crowded — most stays are only a few days, so First name alone is usually enough room.
+                  Spells out &quot;(same bed as X)&quot; or &quot;(same room as X)&quot; on every pill with a Sleeps-near/Shares-bed pairing. Turn off to keep just the small icon.
                 </div>
               </span>
-              {(
-                [
-                  { value: "first", label: "First name", example: "Luca" },
-                  { value: "firstInitial", label: "First name + initial", example: "Luca I" },
-                  { value: "firstLast", label: "First name + full surname", example: "Luca Ilari" },
-                ] as const
-              ).map((opt) => (
-                <label key={opt.value} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer" }}>
-                  <input
-                    type="radio"
-                    name="pillNameMode"
-                    className="tr-settings-checkbox"
-                    checked={pillNameMode === opt.value}
-                    onChange={() => onPillNameModeChange(opt.value)}
-                  />
-                  {opt.label}
-                  <span className="tr-muted" style={{ fontSize: 11 }}>({opt.example})</span>
-                </label>
-              ))}
-            </div>
+              {/* Live preview, not a static screenshot — always matches what the toggle actually does, in both themes.
+                  "Luca" and "Rob" — sample names for this preview only, not real guest names anywhere else in
+                  the app. minWidth is sized for the LONGER (toggle-on) state specifically so the pill doesn't
+                  visibly resize when the "(same bed as X)" text appears/disappears — it should always look this
+                  wide. While the row is hovered, this shows what CLICKING would produce (the opposite of the
+                  current setting), not the current setting itself — an instant preview of the effect even when
+                  nothing in the real grid right now happens to demonstrate it. */}
+              <div className="tr-settings-preview">
+                <span className="tr-grid-booking-pill" style={{ position: "static", minWidth: 220 }}>
+                  <span className="tr-grid-pill-satisfied" aria-hidden="true">👥</span>
+                  <span className="tr-grid-pill-name">Luca</span>
+                  {(hoveredPreviewToggle === "sharesWith" ? !showSharesWithText : showSharesWithText) && (
+                    <span className="tr-grid-pill-relation">
+                      (same bed as <strong>Rob</strong>)
+                    </span>
+                  )}
+                </span>
+              </div>
+            </label>
           </div>
         </>
       )}
