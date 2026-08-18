@@ -350,13 +350,11 @@ export default function DailySheetPage() {
                         >
                           {tags.map((t) => (
                             <li key={t.tag} style={{ marginBottom: 2, overflowWrap: "break-word" }}>
-                              <div style={{ display: "flex", flexWrap: "wrap", alignItems: "flex-start", gap: 4 }}>
-                                <strong style={{ whiteSpace: "nowrap" }}>{t.count}x {t.tag}</strong>
-                                <div style={{ display: "flex", flexDirection: "column" }}>
-                                  {t.guestNames.map((name, ni) => (
-                                    <span key={ni}>({name})</span>
-                                  ))}
-                                </div>
+                              <div style={{ display: "flex", flexDirection: "column" }}>
+                                <strong>{t.count}x {t.tag}</strong>
+                                {t.guestNames.map((name, ni) => (
+                                  <span key={ni}>({name})</span>
+                                ))}
                               </div>
                             </li>
                           ))}
